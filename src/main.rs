@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .layer(CompressionLayer::new())
         .layer(cors);
 
-    let port: u16 = match std::env::var("AC2WD_PORT") {
+    let port: u16 = match std::env::var("WD_INFERNAL_PORT") {
         Ok(port) => port.as_str().parse::<u16>().unwrap_or(8000),
         Err(_) => 8000,
     };
