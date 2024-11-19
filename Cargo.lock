@@ -2461,6 +2461,7 @@ name = "wd-infernal"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "futures",
  "mediawiki",
  "serde",
  "serde_json",
