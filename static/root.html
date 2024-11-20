@@ -5,7 +5,8 @@
 			Wikidata Infernal is an API that allows you to infer new facts from
 			Wikidata. It uses a set of rules to infer new facts from existing
 			ones. The generated statements will have qualifiers to indicate the
-			source and method of the inference.
+			source and method of the inference. Output is an array of statements
+			in JSON/Wikidata format.
 		</p>
 		<ul>
 			<li>
@@ -35,13 +36,18 @@
 				</p>
 				<p>
 					Parses a (western-style, "first_name last_name") personal
-					name, and tries to infer first and last names, as well as
-					gender, based on first names.
+					name, and tries to infer items for first and last names, as
+					well as gender, based on first names.
 				</p>
 				<p>
 					<a href="/name_gender/Heinrich Magnus Manske"> Example </a>
+					(Yours Truly)
 				</p>
 			</li>
 		</ul>
+		<p>
+			Code on
+			<a href="https://github.com/magnusmanske/wd-infernal">GitHub</a>.
+		</p>
 	</body>
 </html>
