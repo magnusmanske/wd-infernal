@@ -7,7 +7,7 @@ pub mod wikidata;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args().len() > 1 {
         // current development test
-        let ret = person::Person::name_gender("Heinrich Magnus Manske")
+        let ret = location::Location::country_for_location_and_date("Q365", 1921)
             .await
             .unwrap();
         println!("{ret:?}");

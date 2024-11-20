@@ -27,6 +27,11 @@ impl Server {
             .route("/", get(Self::root))
             .route("/P131/:latitude/:longitude", get(Self::p131))
             .route("/name_gender/:name", get(Self::name_gender))
+            .route("/country_year/:item/:year", get(Self::country_year))
+            .route(
+                "/country_year/:item/:year/:property",
+                get(Self::country_year_property),
+            )
             .layer(TraceLayer::new_for_http())
             .layer(CompressionLayer::new())
             .layer(cors);
@@ -68,6 +73,23 @@ impl Server {
         Path((latitude, longitude)): Path<(f64, f64)>,
     ) -> Result<impl IntoResponse, StatusCode> {
         let statements = Location::p131(latitude, longitude).await?;
+        Ok(Json(statements))
+    }
+
+    async fn country_year(
+        Path((item, year)): Path<(String, i32)>,
+    ) -> Result<impl IntoResponse, StatusCode> {
+        let statements = Location::country_for_location_and_date(&item, year).await?;
+        Ok(Json(statements))
+    }
+
+    async fn country_year_property(
+        Path((item, year, property)): Path<(String, i32, String)>,
+    ) -> Result<impl IntoResponse, StatusCode> {
+        let mut statements = Location::country_for_location_and_date(&item, year).await?;
+        for statement in &mut statements {
+            statement.set_property(&property.to_uppercase());
+        }
         Ok(Json(statements))
     }
 }
