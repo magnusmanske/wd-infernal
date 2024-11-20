@@ -13,7 +13,7 @@ use tower_http::{
     cors::{Any, CorsLayer},
     trace::TraceLayer,
 };
-use wikibase::{Snak, Statement};
+use wikibase::{Reference, Snak, Statement};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -62,7 +62,7 @@ async fn root() -> impl IntoResponse {
     Html(ret)
 }
 
-fn wd_infernal_qualifier() -> Snak {
+fn wd_infernal_reference_snak() -> Snak {
     Snak::new_item("P887", "Q131287902") // based on heuristic: Wikidata Infernal
 }
 
@@ -182,11 +182,11 @@ async fn get_given_names_for_gender(
 
 fn gender_statement(gender: &str) -> Statement {
     let snak = Snak::new_item("P21", gender);
-    let qualifiers = vec![
-        wd_infernal_qualifier(),
+    let reference = Reference::new(vec![
+        wd_infernal_reference_snak(),
         Snak::new_item("P3452", "Q69652498"), // inferred from person's given name
-    ];
-    Statement::new_normal(snak, qualifiers, vec![])
+    ]);
+    Statement::new_normal(snak, vec![], vec![reference])
 }
 
 async fn add_first_names_gender(
@@ -225,11 +225,11 @@ async fn add_first_names_gender(
             .chain(female.iter())
             .map(|q| {
                 let snak = Snak::new_item("P735", q);
-                let qualifiers = vec![
-                    wd_infernal_qualifier(),
+                let reference = Reference::new(vec![
+                    wd_infernal_reference_snak(),
                     Snak::new_item("P3452", "Q97033143"), // inferred from person's full name
-                ];
-                Statement::new_normal(snak, qualifiers, vec![])
+                ]);
+                Statement::new_normal(snak, vec![], vec![reference])
             })
             .collect();
         statements.extend(name_statements);
@@ -246,11 +246,11 @@ async fn add_last_name(
     if results.len() == 1 {
         if let Some(entity) = results.first() {
             let snak = Snak::new_item("P734", entity);
-            let qualifiers = vec![
-                wd_infernal_qualifier(),
+            let reference = Reference::new(vec![
+                wd_infernal_reference_snak(),
                 Snak::new_item("P3452", "Q97033143"), // inferred from person's full name
-            ];
-            let statement = Statement::new_normal(snak, qualifiers, vec![]);
+            ]);
+            let statement = Statement::new_normal(snak, vec![], vec![reference]);
             statements.push(statement);
         }
     }
@@ -297,11 +297,11 @@ async fn p131(latitude: f64, longitude: f64) -> Result<Vec<Statement>, StatusCod
         .iter()
         .map(|entity| {
             let snak = Snak::new_item("P131", entity);
-            let qualifiers = vec![
-                wd_infernal_qualifier(),
+            let reference = Reference::new(vec![
+                wd_infernal_reference_snak(),
                 Snak::new_item("P3452", "Q96623327"), // inferred from coordinate location
-            ];
-            Statement::new_normal(snak, qualifiers, vec![])
+            ]);
+            Statement::new_normal(snak, vec![], vec![reference])
         })
         .collect();
     Ok(statements)
@@ -344,5 +344,15 @@ mod tests {
     async fn test_name_gender() {
         let results = name_gender("Heinrich Magnus Manske").await.unwrap();
         assert_eq!(results.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn test_wd_infernal_reference() {
+        let snak = wd_infernal_reference_snak();
+        assert_eq!(
+            snak.data_value().as_ref().unwrap().value().to_owned(),
+            wikibase::Value::Entity(EntityValue::new(EntityType::Item, "Q131287902"))
+        );
+        assert_eq!(snak.property(), "P887");
     }
 }
