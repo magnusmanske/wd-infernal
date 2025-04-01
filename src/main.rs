@@ -1,3 +1,4 @@
+pub mod crosscats;
 pub mod location;
 pub mod person;
 pub mod server;
@@ -7,10 +8,10 @@ pub mod wikidata;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args().len() > 1 {
         // current development test
-        let ret = location::Location::country_for_location_and_date("Q365", 1921)
+        let ret = crosscats::CrossCats::cross_cats("Q9649201", 1, "en")
             .await
             .unwrap();
-        println!("{ret:?}");
+        println!("{ret:#?}");
         Ok(())
     } else {
         server::Server::start().await

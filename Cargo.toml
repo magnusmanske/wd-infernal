@@ -20,6 +20,12 @@ tower-http = { version = "*", features = ["full"] }
 wikibase = "*"
 mediawiki = "*"
 futures = "*"
+url = "*"
+async-lazy = "*"
+lazy_static = "*"
+wikibase_rest_api = "*"
+wikimisc = { git = "https://github.com/magnusmanske/wikimisc.git" }
+tools_interface = { git = "https://github.com/magnusmanske/tools_interface.git" }
 
 [profile.release]
 opt-level = 3

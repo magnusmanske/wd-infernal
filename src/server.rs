@@ -1,5 +1,5 @@
-use crate::location::Location;
 use crate::person::Person;
+use crate::{crosscats::CrossCats, location::Location};
 use axum::{
     extract::Path,
     http::StatusCode,
@@ -28,6 +28,10 @@ impl Server {
             .route("/P131/:latitude/:longitude", get(Self::p131))
             .route("/name_gender/:name", get(Self::name_gender))
             .route("/country_year/:item/:year", get(Self::country_year))
+            .route(
+                "/cross_categories/:category_item/:language/:depth",
+                get(Self::cross_cats),
+            )
             .route(
                 "/country_year/:item/:year/:property",
                 get(Self::country_year_property),
@@ -74,6 +78,13 @@ impl Server {
     ) -> Result<impl IntoResponse, StatusCode> {
         let statements = Location::p131(latitude, longitude).await?;
         Ok(Json(statements))
+    }
+
+    async fn cross_cats(
+        Path((category_item, language, depth)): Path<(String, String, u32)>,
+    ) -> Result<impl IntoResponse, StatusCode> {
+        let results = CrossCats::cross_cats(&category_item, depth, &language).await?;
+        Ok(Json(results))
     }
 
     async fn country_year(

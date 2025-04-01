@@ -1,7 +1,6 @@
+use crate::wikidata::Wikidata;
 use axum::http::StatusCode;
 use wikibase::{Reference, Snak, Statement};
-
-use crate::wikidata::Wikidata;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Location {}
