@@ -1,4 +1,5 @@
 use crate::person::Person;
+use crate::referee::Referee;
 use crate::{crosscats::CrossCats, location::Location};
 use axum::{
     extract::Path,
@@ -28,6 +29,7 @@ impl Server {
             .route("/P131/:latitude/:longitude", get(Self::p131))
             .route("/name_gender/:name", get(Self::name_gender))
             .route("/country_year/:item/:year", get(Self::country_year))
+            .route("/referee/:item", get(Self::referee))
             .route(
                 "/cross_categories/:category_item/:language/:depth",
                 get(Self::cross_cats),
@@ -84,6 +86,16 @@ impl Server {
         Path((category_item, language, depth)): Path<(String, String, u32)>,
     ) -> Result<impl IntoResponse, StatusCode> {
         let results = CrossCats::cross_cats(&category_item, depth, &language).await?;
+        Ok(Json(results))
+    }
+
+    async fn referee(Path(item): Path<String>) -> Result<impl IntoResponse, StatusCode> {
+        let results = Referee::new()
+            .await
+            .map_err(|_| StatusCode::NOT_FOUND)?
+            .get_potential_references(&item)
+            .await
+            .map_err(|_| StatusCode::NOT_FOUND)?;
         Ok(Json(results))
     }
 

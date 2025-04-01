@@ -61,6 +61,33 @@ pub struct TextPart {
     after: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, PartialEq, PartialOrd)]
+pub struct ConciseUrlCandidate {
+    statement_id: String,
+    url: String,
+    property: Option<String>,
+    external_id: Option<String>,
+    language: String,
+    before: String,
+    regexp_match: String,
+    after: String,
+}
+
+impl ConciseUrlCandidate {
+    fn new(statement_id: &str, uc: &UrlCandidate, tp: &TextPart) -> Self {
+        Self {
+            statement_id: statement_id.to_string(),
+            url: uc.url.clone(),
+            property: uc.property.clone(),
+            external_id: uc.external_id.clone(),
+            language: uc.language.clone(),
+            before: tp.before.clone(),
+            regexp_match: tp.regexp_match.clone(),
+            after: tp.after.clone(),
+        }
+    }
+}
+
 pub struct Referee {
     api: Api,
     entities: EntityContainer,
@@ -303,10 +330,10 @@ impl Referee {
             let future = self.load_json_from_url(url);
             futures.push(future);
         }
-        println!("LOADING {} Wiki pages", futures.len());
+        // println!("LOADING {} Wiki pages", futures.len());
         let wiki_pages: Vec<serde_json::Value> =
             join_all(futures).await.into_iter().flatten().collect();
-        println!("LOADED  {} Wiki pages", wiki_pages.len());
+        // println!("LOADED  {} Wiki pages", wiki_pages.len());
 
         let mut futures = vec![];
         for json in &wiki_pages {
@@ -320,14 +347,14 @@ impl Referee {
             let future = self.generate_url_candidate(url);
             futures.push(future);
         }
-        println!("LOADING {} Wiki-based candidates", futures.len());
+        // println!("LOADING {} Wiki-based candidates", futures.len());
         let url_candidates: HashMap<String, UrlCandidate> = join_all(futures)
             .await
             .into_iter()
             .flatten()
             .map(|uc| (uc.url.clone(), uc))
             .collect();
-        println!("LOADED  {} Wiki-based candidates", url_candidates.len());
+        // println!("LOADED  {} Wiki-based candidates", url_candidates.len());
 
         url_candidates
     }
@@ -501,14 +528,14 @@ impl Referee {
             let future = self.get_url_candidate_from_external_id(property, external_id, url);
             futures.push(future);
         }
-        println!("LOADING {} futures for ext_ids", futures.len());
+        // println!("LOADING {} futures for ext_ids", futures.len());
         let ret: UniqueUrlCandidates = join_all(futures)
             .await
             .into_iter()
             .flatten()
             .map(|uc| (uc.url.to_string(), uc))
             .collect();
-        println!("LOADED  {} futures for ext_ids", ret.len());
+        // println!("LOADED  {} futures for ext_ids", ret.len());
 
         ret
     }
@@ -556,7 +583,7 @@ impl Referee {
             let future = self.get_contents_from_url(website);
             futures.push(future);
         }
-        println!("LOADING {} futures for official_websites", futures.len());
+        // println!("LOADING {} futures for official_websites", futures.len());
         let ret: UniqueUrlCandidates = join_all(futures)
             .await
             .into_iter()
@@ -578,7 +605,7 @@ impl Referee {
                 )
             })
             .collect();
-        println!("LOADED  {} futures for official_websites", ret.len());
+        // println!("LOADED  {} futures for official_websites", ret.len());
         ret
     }
 
@@ -771,8 +798,8 @@ impl Referee {
     pub async fn get_potential_references(
         &mut self,
         entity: &str,
-    ) -> Result<HashMap<String, Vec<(UrlCandidate, TextPart)>>> {
-        let mut ret = HashMap::new();
+    ) -> Result<Vec<ConciseUrlCandidate>> {
+        let mut ret = Vec::new();
         let entity = entity.trim().to_uppercase();
 
         if !self.is_supported_entity(&entity).await? {
@@ -794,14 +821,12 @@ impl Referee {
                 Some(id) => id.to_owned(),
                 None => continue,
             };
-            let mut all_parts = vec![];
 
             for url_candidate in url_candidates.values() {
                 if self.does_statement_have_this_reference(statement, url_candidate) {
                     continue;
                 }
 
-                let mut parts = Vec::new();
                 let patterns = self
                     .get_statement_search_patterns(statement, &url_candidate.language)
                     .await?;
@@ -823,28 +848,12 @@ impl Referee {
                                 regexp_match: matched,
                                 after,
                             };
-                            parts.push(((*url_candidate).to_owned(), tp));
+                            ret.push(ConciseUrlCandidate::new(&statement_id, url_candidate, &tp))
                         }
                     }
                 }
-
-                if parts.is_empty() {
-                    continue;
-                }
-
-                all_parts.extend(parts);
             }
-            // Remove text part
-            let all_parts = all_parts
-                .into_iter()
-                .map(|(mut uc, tp)| {
-                    uc.text.clear();
-                    (uc, tp)
-                })
-                .collect();
-            ret.insert(statement_id, all_parts);
         }
-
         Ok(ret)
     }
 

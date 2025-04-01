@@ -23,6 +23,10 @@ futures = "*"
 url = "*"
 async-lazy = "*"
 lazy_static = "*"
+regex = "*"
+reqwest = "*"
+chrono = "*"
+anyhow = "*"
 wikibase_rest_api = "*"
 wikimisc = { git = "https://github.com/magnusmanske/wikimisc.git" }
 tools_interface = { git = "https://github.com/magnusmanske/tools_interface.git" }

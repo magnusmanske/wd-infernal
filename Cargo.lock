@@ -3182,11 +3182,15 @@ dependencies = [
 name = "wd-infernal"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-lazy",
  "axum",
+ "chrono",
  "futures",
  "lazy_static",
  "mediawiki 0.3.1",
+ "regex",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",

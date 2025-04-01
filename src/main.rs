@@ -1,6 +1,7 @@
 pub mod crosscats;
 pub mod location;
 pub mod person;
+pub mod referee;
 pub mod server;
 pub mod wikidata;
 
