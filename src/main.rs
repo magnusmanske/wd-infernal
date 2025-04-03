@@ -18,7 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .get_potential_references(&item)
                     .await
                     .unwrap();
-                // println!("{ret:#?}");
+                println!("{ret:#?}");
                 println!("{}", ret.len());
             }
             "crosscats" => {

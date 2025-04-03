@@ -7,7 +7,10 @@ use regex::Regex;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::{
+    cmp::Ordering,
+    collections::{HashMap, HashSet},
+};
 use wikibase::{
     entity_container::EntityContainer, mediawiki::Api, DataValueType, Entity, EntityTrait, Snak,
     SnakDataType, Statement,
@@ -54,24 +57,51 @@ pub struct UrlCandidate {
     text: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
 pub struct TextPart {
     before: String,
     regexp_match: String,
     after: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, PartialOrd)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ConciseUrlCandidate {
     statement_id: String,
     url: String,
     property: Option<String>,
     external_id: Option<String>,
     language: String,
-    before: String,
-    regexp_match: String,
-    after: String,
+    texts: Vec<TextPart>,
 }
+
+impl Ord for ConciseUrlCandidate {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.statement_id
+            .cmp(&other.statement_id)
+            .then(self.url.cmp(&other.url))
+            .then(self.property.cmp(&other.property))
+            .then(self.external_id.cmp(&other.external_id))
+            .then(self.language.cmp(&other.language))
+    }
+}
+
+impl PartialOrd for ConciseUrlCandidate {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for ConciseUrlCandidate {
+    fn eq(&self, other: &Self) -> bool {
+        self.statement_id == other.statement_id
+            && self.url == other.url
+            && self.property == other.property
+            && self.external_id == other.external_id
+            && self.language == other.language
+    }
+}
+
+impl Eq for ConciseUrlCandidate {}
 
 impl ConciseUrlCandidate {
     fn new(statement_id: &str, uc: &UrlCandidate, tp: &TextPart) -> Self {
@@ -81,9 +111,7 @@ impl ConciseUrlCandidate {
             property: uc.property.clone(),
             external_id: uc.external_id.clone(),
             language: uc.language.clone(),
-            before: tp.before.clone(),
-            regexp_match: tp.regexp_match.clone(),
-            after: tp.after.clone(),
+            texts: vec![tp.clone()],
         }
     }
 }
@@ -833,13 +861,29 @@ impl Referee {
             let future = self.process_statement(statement, &url_candidates);
             futures.push(future);
         }
-        let ret = join_all(futures)
+        let mut ret: Vec<ConciseUrlCandidate> = join_all(futures)
             .await
             .into_iter()
             .filter_map(|r| r.ok())
             .flatten()
             .collect();
+        ret.sort();
+        let ret = Self::merge_cuc_candidates(ret);
+
         Ok(ret)
+    }
+
+    fn merge_cuc_candidates(mut input: Vec<ConciseUrlCandidate>) -> Vec<ConciseUrlCandidate> {
+        let mut ret = vec![input.remove(0)];
+        for current in input {
+            let last = ret.last_mut().unwrap(); //Safe
+            if current == *last {
+                last.texts.extend(current.texts);
+            } else {
+                ret.push(current);
+            }
+        }
+        ret
     }
 
     async fn process_statement(
