@@ -142,7 +142,6 @@ impl Referee {
         let status = response.status();
 
         if !status.is_success() {
-            // TODO cache bad URLs somewhere?
             return Ok(String::new());
         }
 
@@ -204,11 +203,15 @@ impl Referee {
         Ok(ret)
     }
 
+    // fn _other_html2text(&self, html: &str) -> String {
+    //     let ret = html2text::config::plain_no_decorate()
+    //         .string_from_read(html.as_bytes(), usize::MAX)
+    //         .unwrap_or_default();
+    //     ret
+    // }
+
     fn html2text(&self, html: &str) -> String {
-        // TODO
-        // let mut ret = html2text::config::plain()
-        //     .string_from_read(html.as_bytes(), 999999)
-        //     .unwrap_or_default();
+        // TODO use _other_html2text
         let mut ret = html.to_string();
 
         // Step by step replacements similar to the PHP version
@@ -260,8 +263,18 @@ impl Referee {
         ret
     }
 
+    // fn _new_guess_page_language_from_text(&self, text: &str) -> String {
+    //     let detector = lingua::LanguageDetectorBuilder::from_all_languages().build();
+    //     let detected_language = detector
+    //         .detect_language_of(text)
+    //         .map(|l| l.iso_code_639_1().to_string());
+    //     let detected_language = detected_language.unwrap_or("en".to_string());
+    //     println!("Detected language: {detected_language}");
+    //     detected_language
+    // }
+
     fn guess_page_language_from_text(&self, text: &str) -> String {
-        // TODO use a proper library for this
+        // TODO use _new_guess_page_language_from_text
         let mut ret = "en".to_string(); // Default
         let mut candidates = HashMap::new();
 
@@ -799,63 +812,87 @@ impl Referee {
         &mut self,
         entity: &str,
     ) -> Result<Vec<ConciseUrlCandidate>> {
-        let mut ret = Vec::new();
         let entity = entity.trim().to_uppercase();
 
         if !self.is_supported_entity(&entity).await? {
-            return Ok(ret);
+            return Ok(vec![]);
         }
 
         let statements = self.get_statements_needing_references(&entity).await?;
         if statements.is_empty() {
-            return Ok(ret);
+            return Ok(vec![]);
         }
 
         let url_candidates = self.get_candidate_urls(&entity).await?;
         if url_candidates.is_empty() {
-            return Ok(ret);
+            return Ok(vec![]);
         }
 
+        let mut futures = vec![];
         for statement in &statements {
-            let statement_id = match statement.claim.id() {
-                Some(id) => id.to_owned(),
-                None => continue,
-            };
+            let future = self.process_statement(statement, &url_candidates);
+            futures.push(future);
+        }
+        let ret = join_all(futures)
+            .await
+            .into_iter()
+            .filter_map(|r| r.ok())
+            .flatten()
+            .collect();
+        Ok(ret)
+    }
 
-            for url_candidate in url_candidates.values() {
-                if self.does_statement_have_this_reference(statement, url_candidate) {
+    async fn process_statement(
+        &self,
+        statement: &EntityStatement,
+        url_candidates: &HashMap<String, UrlCandidate>,
+    ) -> Result<Vec<ConciseUrlCandidate>> {
+        let mut ret = Vec::new();
+        let statement_id = match statement.claim.id() {
+            Some(id) => id.to_owned(),
+            None => return Ok(ret),
+        };
+
+        for url_candidate in url_candidates.values() {
+            if self.does_statement_have_this_reference(statement, url_candidate) {
+                continue;
+            }
+
+            let patterns = self
+                .get_statement_search_patterns(statement, &url_candidate.language)
+                .await?;
+
+            for pattern in patterns {
+                if pattern.trim().is_empty() {
                     continue;
                 }
 
-                let patterns = self
-                    .get_statement_search_patterns(statement, &url_candidate.language)
-                    .await?;
+                let re_pattern = format!(r"\b(.{{0,60}})\b({})\b(.{{0,60}})\b", pattern);
+                if let Ok(re) = Regex::new(&re_pattern) {
+                    if let Some(caps) = re.captures(&url_candidate.text) {
+                        let before = caps.get(1).map_or("", |m| m.as_str()).to_string();
+                        let matched = caps.get(2).map_or("", |m| m.as_str()).to_string();
+                        let after = caps.get(3).map_or("", |m| m.as_str()).to_string();
 
-                for pattern in patterns {
-                    if pattern.trim().is_empty() {
-                        continue;
-                    }
-
-                    let re_pattern = format!(r"\b(.{{0,60}})\b({})\b(.{{0,60}})\b", pattern);
-                    if let Ok(re) = Regex::new(&re_pattern) {
-                        if let Some(caps) = re.captures(&url_candidate.text) {
-                            let before = caps.get(1).map_or("", |m| m.as_str()).to_string();
-                            let matched = caps.get(2).map_or("", |m| m.as_str()).to_string();
-                            let after = caps.get(3).map_or("", |m| m.as_str()).to_string();
-
-                            let tp = TextPart {
-                                before,
-                                regexp_match: matched,
-                                after,
-                            };
-                            ret.push(ConciseUrlCandidate::new(&statement_id, url_candidate, &tp))
-                        }
+                        let tp = TextPart {
+                            before,
+                            regexp_match: matched,
+                            after,
+                        };
+                        ret.push(ConciseUrlCandidate::new(&statement_id, url_candidate, &tp))
                     }
                 }
             }
         }
         Ok(ret)
     }
+
+    // fn get_linked_entity(&self, statement: &EntityStatement) -> Option<String> {
+    //     match statement.claim.main_snak().data_value().as_ref()?.value() {
+    //         wikibase::Value::Entity(entity_value) => Some(entity_value.id().to_string()),
+    //         _ => None,
+    //     }
+    // }
 
     fn add_locale_specific_dates(
         language: &str,
