@@ -1,3 +1,3 @@
 #!/bin/bash
-toolforge webservice buildservice stop
+toolforge webservice stop
 toolforge webservice buildservice start --mount=none
