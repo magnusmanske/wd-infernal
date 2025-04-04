@@ -1,0 +1,49 @@
+<?xml version='1.0' encoding='UTF-8'?>
+        <feed
+            xmlns='http://www.w3.org/2005/Atom'
+            xmlns:openSearch='http://a9.com/-/spec/opensearchrss/1.0/'
+            xmlns:gbs='http://schemas.google.com/books/2008'
+            xmlns:gd='http://schemas.google.com/g/2005'
+            xmlns:batch='http://schemas.google.com/gdata/batch'
+            xmlns:dc='http://purl.org/dc/terms'>
+            <id>http://www.google.com/books/feeds/volumes</id>
+            <updated>2025-04-03T15:35:35.000Z</updated>
+            <category scheme='http://schemas.google.com/g/2005#kind' term='http://schemas.google.com/books/2008#volume'/>
+            <title type='text'>Search results for isbn:978-2-26-702700-6</title>
+            <link rel='alternate' type='text/html' href='http://www.google.com'/>
+            <link rel='http://schemas.google.com/g/2005#feed' type='application/atom+xml' href='http://www.google.com/books/feeds/volumes'/>
+            <link rel='self' type='application/atom+xml' href='http://www.google.com/books/feeds/volumes?q=isbn%3A978-2-26-702700-6&amp;max-results=25'/>
+            <author>
+                <name>Google Books Search</name>
+                <uri>http://www.google.com</uri>
+            </author>
+            <generator version='beta'>Google Book Search data API</generator>
+            <openSearch:totalResults>1</openSearch:totalResults>
+            <openSearch:startIndex>1</openSearch:startIndex>
+            <openSearch:itemsPerPage>25</openSearch:itemsPerPage>
+            <entry>
+                <id>http://www.google.com/books/feeds/volumes/1gLCoQEACAAJ</id>
+                <updated>2025-04-03T15:35:35.000Z</updated>
+                <category scheme='http://schemas.google.com/g/2005#kind' term='http://schemas.google.com/books/2008#volume'/>
+                <title type='text'>La fraternité de l'anneau</title>
+                <link rel='http://schemas.google.com/books/2008/info' type='text/html' href='http://books.google.com/books?id=1gLCoQEACAAJ&amp;dq=isbn:978-2-26-702700-6&amp;source=gbs_gdata'/>
+                <link rel='http://schemas.google.com/books/2008/preview' type='text/html' href='http://books.google.com/books?id=1gLCoQEACAAJ&amp;dq=isbn:978-2-26-702700-6&amp;cd=1&amp;source=gbs_gdata'/>
+                <link rel='http://schemas.google.com/books/2008/annotation' type='application/atom+xml' href='http://www.google.com/books/feeds/users/me/volumes'/>
+                <link rel='alternate' type='text/html' href='http://books.google.com/books?id=1gLCoQEACAAJ&amp;dq=isbn:978-2-26-702700-6'/>
+                <link rel='self' type='application/atom+xml' href='http://www.google.com/books/feeds/volumes/1gLCoQEACAAJ'/>
+                <gbs:contentVersion>preview-1.0.0</gbs:contentVersion>
+                <gbs:embeddability value='http://schemas.google.com/books/2008#not_embeddable'/>
+                <gbs:openAccess value='http://schemas.google.com/books/2008#disabled'/>
+                <gbs:viewability value='http://schemas.google.com/books/2008#view_no_pages'/>
+                <dc:creator>John Ronald Reuel Tolkien</dc:creator>
+                <dc:date>2014</dc:date>
+                <dc:description>Depuis sa publication en 1954-1955, Le Seigneur des Anneaux a enchanté des dizaines de millions de lecteurs dans le monde entier, et donné vie à la fantasy moderne, en racontant les aventures de Frodo et de ses compagnons, traversant la ...</dc:description>
+                <dc:format>511 pages</dc:format>
+                <dc:format>book</dc:format>
+                <dc:identifier>1gLCoQEACAAJ</dc:identifier>
+                <dc:identifier>ISBN:2267027003</dc:identifier>
+                <dc:identifier>ISBN:9782267027006</dc:identifier>
+                <dc:language>fr</dc:language>
+                <dc:title>La fraternité de l'anneau</dc:title>
+            </entry>
+        </feed>

@@ -1,4 +1,5 @@
 pub mod crosscats;
+pub mod isbn;
 pub mod location;
 pub mod person;
 pub mod referee;
@@ -10,6 +11,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args().len() > 2 {
         let command = std::env::args().nth(1).unwrap();
         match command.as_str() {
+            "isbn" => {
+                let isbn = std::env::args().nth(2).unwrap();
+                let mut isbn2wiki = isbn::ISBN2wiki::new(&isbn).unwrap();
+                isbn2wiki.retrieve().await.unwrap();
+                println!("{isbn2wiki:#?}");
+            }
             "referee" => {
                 let item = std::env::args().nth(2).unwrap();
                 let ret = referee::Referee::new()
