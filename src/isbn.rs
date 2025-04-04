@@ -8,8 +8,12 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 
 lazy_static! {
-    static ref GOODREADS_ID: Regex = Regex::new(r"/(\d+)\.jpg$").unwrap();
-    static ref GOOGLE_BOOKS_ID: Regex = Regex::new(r"^([a-zA-Z0-9]+)$").unwrap();
+    static ref RE_GOODREADS_ID: Regex = Regex::new(r"/(\d+)\.jpg$").unwrap();
+    static ref RE_GOOGLE_BOOKS_ID: Regex = Regex::new(r"^([a-zA-Z0-9]+)$").unwrap();
+    static ref RE_ISBN_10: Regex = Regex::new(r"^ISBN:(\d{9}[0-9X])$").unwrap();
+    static ref RE_ISBN_13: Regex = Regex::new(r"^ISBN:(\d{12}[0-9X])$").unwrap();
+    static ref RE_PAGES: Regex = Regex::new(r"^(\d+) pages$").unwrap();
+    static ref RE_YEAR: Regex = Regex::new(r"^(\d{4})$").unwrap();
     static ref LANGUAGE_LABELS: HashMap<String, String> = {
         let json_string = include_str!("../static/languages.json");
         let data: HashMap<String, String> = serde_json::from_str(json_string).unwrap();
@@ -17,10 +21,34 @@ lazy_static! {
     };
 }
 
+#[derive(Debug, Deserialize, PartialEq)]
+struct GoogleBooksEntry {
+    id: Vec<String>,
+    title: String,
+    #[serde(default)]
+    identifier: Vec<String>,
+    #[serde(default)]
+    dctitle: Vec<String>,
+    #[serde(default)]
+    date: Vec<String>,
+    #[serde(default)]
+    format: Vec<String>,
+    #[serde(default)]
+    creator: Vec<String>,
+    #[serde(default)]
+    language: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+struct GoogleBooksFeed {
+    entry: Vec<GoogleBooksEntry>,
+}
+
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum DataValue {
     Monolingual { label: String, language: String },
     String(String),
+    Entity(String),
     Date { time: String, precision: u8 },
     Quantity(i64),
 }
@@ -37,6 +65,14 @@ impl Reference {
         Reference {
             property: Some(property.to_string()),
             value: Some(value.to_string()),
+            url: None,
+        }
+    }
+
+    fn none() -> Self {
+        Reference {
+            property: None,
+            value: None,
             url: None,
         }
     }
@@ -127,28 +163,6 @@ impl ISBN2wiki {
         let xml = xml
             .replace("<dc:title", "<dctitle")
             .replace("</dc:title", "</dctitle"); // To avoid XML namespace problems with serde
-        #[derive(Debug, Deserialize, PartialEq)]
-        struct GoogleBooksEntry {
-            id: Vec<String>,
-            title: String,
-            #[serde(default)]
-            identifier: Vec<String>,
-            #[serde(default)]
-            dctitle: Vec<String>,
-            #[serde(default)]
-            date: Vec<String>,
-            #[serde(default)]
-            format: Vec<String>,
-            #[serde(default)]
-            creator: Vec<String>,
-            #[serde(default)]
-            language: Vec<String>,
-        }
-
-        #[derive(Debug, Deserialize, PartialEq)]
-        struct GoogleBooksFeed {
-            entry: Vec<GoogleBooksEntry>,
-        }
 
         let feed: GoogleBooksFeed = serde_xml_rs::from_str(&xml)?;
         println!("{feed:#?}");
@@ -158,16 +172,7 @@ impl ISBN2wiki {
             .first()
             .ok_or_else(|| anyhow!("No entry found in Google books"))?;
 
-        let mut google_books_id: Option<String> = None;
-        for identifier in &entry.identifier {
-            if let Some(captures) = GOOGLE_BOOKS_ID.captures(identifier.as_str()) {
-                if let Some(first_group) = captures.get(1) {
-                    google_books_id = Some(first_group.as_str().to_string());
-                }
-            };
-        }
-        let google_books_id = google_books_id.ok_or_else(|| anyhow!("No ID found"))?;
-        println!("Google Books ID: {google_books_id}");
+        let google_books_id = self.extract_google_book_identifiers(entry)?;
 
         if let Some(language) = entry.language.first() {
             self.add_reference(
@@ -180,7 +185,97 @@ impl ISBN2wiki {
             );
         }
 
+        for format in &entry.format {
+            if let Some(captures) = RE_PAGES.captures(format.as_str()) {
+                if let Some(first_group) = captures.get(1) {
+                    if let Ok(number_of_pages) = first_group.as_str().parse::<i64>() {
+                        self.add_reference(
+                            "P1104",
+                            DataValue::Quantity(number_of_pages),
+                            Reference::prop("P675", &google_books_id),
+                        );
+                    }
+                }
+            }
+            if format == "book" {
+                self.add_reference(
+                    "P31",
+                    DataValue::Entity("Q571".to_string()),
+                    Reference::prop("P675", &google_books_id),
+                );
+            }
+        }
+
+        for date in &entry.date {
+            if let Some(captures) = RE_PAGES.captures(date.as_str()) {
+                if let Some(first_group) = captures.get(1) {
+                    let time = format!("+{}-01-01T00:00:00Z", first_group.as_str());
+                    self.add_reference(
+                        "P577",
+                        DataValue::Date { time, precision: 9 },
+                        Reference::prop("P675", &google_books_id),
+                    );
+                }
+            }
+        }
+
+        for creator in &entry.creator {
+            self.add_reference(
+                "P225",
+                DataValue::String(creator.to_owned()),
+                Reference::prop("P675", &google_books_id),
+            )
+        }
+
         Ok(())
+    }
+
+    fn extract_google_book_identifiers(
+        &mut self,
+        entry: &GoogleBooksEntry,
+    ) -> Result<String, anyhow::Error> {
+        let mut google_books_id: Option<String> = None;
+        for identifier in &entry.identifier {
+            if let Some(captures) = RE_GOOGLE_BOOKS_ID.captures(identifier.as_str()) {
+                if let Some(first_group) = captures.get(1) {
+                    google_books_id = Some(first_group.as_str().to_string());
+                }
+            };
+            if let Some(captures) = RE_ISBN_10.captures(identifier.as_str()) {
+                if let Some(first_group) = captures.get(1) {
+                    let isbn = first_group.as_str().to_string();
+                    let isbn = format!(
+                        "{}-{}-{}-{}",
+                        &isbn[0..1],
+                        &isbn[1..4],
+                        &isbn[4..9],
+                        &isbn[9..10]
+                    );
+                    self.add_reference("P957", DataValue::String(isbn), Reference::none());
+                }
+            };
+            if let Some(captures) = RE_ISBN_13.captures(identifier.as_str()) {
+                if let Some(first_group) = captures.get(1) {
+                    let isbn = first_group.as_str().to_string();
+                    let isbn = format!(
+                        "{}-{}-{}-{}-{}",
+                        &isbn[0..3],
+                        &isbn[3..4],
+                        &isbn[4..6],
+                        &isbn[6..12],
+                        &isbn[12..13]
+                    );
+                    self.add_reference("212", DataValue::String(isbn), Reference::none());
+                }
+            };
+        }
+        let google_books_id = google_books_id.ok_or_else(|| anyhow!("No ID found"))?;
+        self.add_reference(
+            "P675",
+            DataValue::String(google_books_id.clone()),
+            Reference::none(),
+        );
+        Ok(google_books_id)
     }
 
     async fn _load_from_goodreads(&mut self) -> Result<()> {
@@ -201,7 +296,7 @@ impl ISBN2wiki {
             Some(url) => url,
             None => return Err(anyhow!("No ID found")),
         };
-        let goodreads_work_id = match GOODREADS_ID.captures(goodreads_thumbnail_url.as_str()) {
+        let goodreads_work_id = match RE_GOODREADS_ID.captures(goodreads_thumbnail_url.as_str()) {
             Some(captures) => {
                 if let Some(first_group) = captures.get(1) {
                     first_group.as_str().to_string()
@@ -332,5 +427,6 @@ mod tests {
         let xml = include_str!("../static/google_books.xml");
         isbn2wiki.parse_google_books_xml(xml).unwrap();
         println!("{:?}", isbn2wiki.values);
+        // TODO actually compare the parsed values with the expected values
     }
 }
