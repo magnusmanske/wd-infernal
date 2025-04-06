@@ -424,7 +424,7 @@ mod tests {
     #[test]
     fn test_parse_google_books_xml() {
         let mut isbn2wiki = ISBN2wiki::new("9782267027006").unwrap();
-        let xml = include_str!("../static/google_books.xml");
+        let xml = include_str!("../test_files/google_books.xml");
         isbn2wiki.parse_google_books_xml(xml).unwrap();
         println!("{:?}", isbn2wiki.values);
         // TODO actually compare the parsed values with the expected values

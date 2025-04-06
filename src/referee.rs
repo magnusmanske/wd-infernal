@@ -16,6 +16,9 @@ use wikibase::{
     SnakDataType, Statement,
 };
 
+// TODO FIXME add P248 (stated in) from property item
+// TODO FIXME test Q133816963 official website => url
+
 lazy_static! {
     static ref RE_WIKI: Regex = Regex::new(r"\b(wikipedia|wikimedia|wik[a-z-]+)\.org/").unwrap();
 }
