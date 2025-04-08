@@ -781,6 +781,12 @@ impl Referee {
                         .filter(|s| s.language() == language)
                         .map(|s| s.value().to_owned())
                         .collect();
+                    let label_mul: Option<String> = vi
+                        .labels()
+                        .iter()
+                        .filter(|s| s.language() == "mul")
+                        .map(|s| s.value().to_owned())
+                        .next();
                     let label_opt: Option<String> = vi
                         .labels()
                         .iter()
@@ -789,6 +795,9 @@ impl Referee {
                         .next();
 
                     if let Some(label) = label_opt {
+                        aliases.insert(0, label); // Make label first entry
+                    }
+                    if let Some(label) = label_mul {
                         aliases.insert(0, label); // Make label first entry
                     }
 
