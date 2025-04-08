@@ -20,6 +20,8 @@ lazy_static! {
     static ref RE_WIKI: Regex = Regex::new(r"\b(wikipedia|wikimedia|wik[a-z-]+)\.org/").unwrap();
 }
 
+const _BAD_URLS: &[&str] = &["://g.co/", "viaf.org/", "wmflabs.org"]; // TODO use this
+
 type UniqueUrlCandidates = HashMap<String, UrlCandidate>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
