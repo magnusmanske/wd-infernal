@@ -16,8 +16,6 @@ use wikibase::{
     SnakDataType, Statement,
 };
 
-// TODO FIXME add P248 (stated in) from property item
-
 lazy_static! {
     static ref RE_WIKI: Regex = Regex::new(r"\b(wikipedia|wikimedia|wik[a-z-]+)\.org/").unwrap();
 }
@@ -62,6 +60,7 @@ pub struct UrlCandidate {
     url_type: UrlType,
     property: Option<String>,
     external_id: Option<String>,
+    stated_in: Option<String>,
     language: String,
     text: String,
 }
@@ -79,6 +78,7 @@ pub struct ConciseUrlCandidate {
     url: String,
     property: Option<String>,
     external_id: Option<String>,
+    stated_in: Option<String>,
     language: String,
     texts: Vec<TextPart>,
 }
@@ -119,6 +119,7 @@ impl ConciseUrlCandidate {
             url: uc.url.clone(),
             property: uc.property.clone(),
             external_id: uc.external_id.clone(),
+            stated_in: uc.stated_in.clone(),
             language: uc.language.clone(),
             texts: vec![tp.clone()],
         }
@@ -452,12 +453,7 @@ impl Referee {
         candidates
     }
 
-    async fn generate_url_candidate(
-        &self,
-        // wiki: &str,
-        // page: &str,
-        url: &str,
-    ) -> Option<UrlCandidate> {
+    async fn generate_url_candidate(&self, url: &str) -> Option<UrlCandidate> {
         let contents = self.get_contents_from_url(url).await;
         if contents.is_empty() {
             return None;
@@ -469,6 +465,7 @@ impl Referee {
             url_type: UrlType::WikiExternal,
             property: None,
             external_id: None,
+            stated_in: None,
             language,
             text,
         };
@@ -509,12 +506,47 @@ impl Referee {
         let f3 = self.get_candidates_for_external_ids(&item);
         let (from_wikis, official_websites, external_ids) = join!(f1, f2, f3);
 
-        let ret = from_wikis
+        let mut ret = from_wikis
             .into_iter()
             .chain(official_websites.into_iter())
             .chain(external_ids.into_iter())
             .collect();
+
+        self.add_stated_in(&mut ret).await?;
+
         Ok(ret)
+    }
+
+    async fn add_stated_in(&self, concise_urls: &mut HashMap<String, UrlCandidate>) -> Result<()> {
+        // Ensure all used properties are loaded
+        let mut properties: Vec<String> = concise_urls
+            .iter()
+            .filter_map(|(_k, v)| v.property.to_owned())
+            .filter(|p| !self.entities.has_entity(p))
+            .collect();
+        properties.sort();
+        properties.dedup();
+        self.entities.load_entities(&self.api, &properties).await?;
+
+        // Add "stated in" where possible
+        concise_urls.iter_mut().for_each(|(_k, uc)| {
+            if let Some(stated_in) = self.add_stated_in_to_url_candidate(uc) {
+                uc.stated_in = Some(stated_in);
+            }
+        });
+        Ok(())
+    }
+
+    fn add_stated_in_to_url_candidate(&self, uc: &mut UrlCandidate) -> Option<String> {
+        let property = uc.property.as_ref()?;
+        let prop = self.entities.get_entity(property)?;
+        let claims = prop.claims_with_property("P9073");
+        let claim = claims.first()?;
+        let dv = claim.main_snak().data_value().as_ref()?;
+        match dv.value() {
+            wikibase::Value::Entity(ev) => Some(ev.id().to_string()),
+            _ => None,
+        }
     }
 
     async fn get_candidates_for_external_ids(&self, item: &Entity) -> UniqueUrlCandidates {
@@ -605,6 +637,7 @@ impl Referee {
             url_type: UrlType::ExternalId,
             property: Some(property.to_string()),
             external_id: Some(external_id.to_string()),
+            stated_in: None,
             language,
             text,
         };
@@ -654,6 +687,7 @@ impl Referee {
                         url_type: UrlType::DirectWebsite,
                         property: None,
                         external_id: None,
+                        stated_in: None,
                         language,
                         text,
                     },
