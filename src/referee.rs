@@ -622,8 +622,15 @@ impl Referee {
     }
     async fn get_official_websites(&self, item: &Entity) -> UniqueUrlCandidates {
         let official_websites = self.get_string_values_for_property(item, "P856");
+        let described_at_url = self.get_string_values_for_property(item, "P973");
+        let mut websites: Vec<_> = official_websites
+            .into_iter()
+            .chain(described_at_url.into_iter())
+            .collect();
+        websites.sort();
+        websites.dedup();
         let mut futures = vec![];
-        for website in &official_websites {
+        for website in &websites {
             let future = self.get_contents_from_url(website);
             futures.push(future);
         }
@@ -631,7 +638,7 @@ impl Referee {
         let ret: UniqueUrlCandidates = join_all(futures)
             .await
             .into_iter()
-            .zip(official_websites)
+            .zip(websites)
             .filter(|(_url, html)| !html.is_empty())
             .map(|(url, html)| {
                 let text = self.html2text(&html);
