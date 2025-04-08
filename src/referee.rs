@@ -17,13 +17,19 @@ use wikibase::{
 };
 
 // TODO FIXME add P248 (stated in) from property item
-// TODO FIXME test Q133816963 official website => url
 
 lazy_static! {
     static ref RE_WIKI: Regex = Regex::new(r"\b(wikipedia|wikimedia|wik[a-z-]+)\.org/").unwrap();
 }
 
 type UniqueUrlCandidates = HashMap<String, UrlCandidate>;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+enum UrlType {
+    WikiExternal,
+    ExternalId,
+    DirectWebsite,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct UrlPatternBlacklist {
@@ -53,7 +59,7 @@ struct EntityStatement {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UrlCandidate {
     url: String,
-    regexp_type: String,
+    url_type: UrlType,
     property: Option<String>,
     external_id: Option<String>,
     language: String,
@@ -460,9 +466,7 @@ impl Referee {
         let language = self.guess_page_language_from_text(&text);
         let ret = UrlCandidate {
             url: url.to_string(),
-            regexp_type: "wiki-exturl".to_string(),
-            // wiki: Some(wiki.to_string()),
-            // page: Some(page.to_string()),
+            url_type: UrlType::WikiExternal,
             property: None,
             external_id: None,
             language,
@@ -501,7 +505,7 @@ impl Referee {
         }
 
         let f1 = self.get_candidate_urls_from_wikis(&item);
-        let f2 = self.get_official_websites(&item);
+        let f2 = self.get_direct_websites(&item);
         let f3 = self.get_candidates_for_external_ids(&item);
         let (from_wikis, official_websites, external_ids) = join!(f1, f2, f3);
 
@@ -598,7 +602,7 @@ impl Referee {
         let language = self.guess_page_language_from_text(&text);
         let ret = UrlCandidate {
             url,
-            regexp_type: "external-id".to_string(),
+            url_type: UrlType::ExternalId,
             property: Some(property.to_string()),
             external_id: Some(external_id.to_string()),
             language,
@@ -620,7 +624,7 @@ impl Referee {
             })
             .collect()
     }
-    async fn get_official_websites(&self, item: &Entity) -> UniqueUrlCandidates {
+    async fn get_direct_websites(&self, item: &Entity) -> UniqueUrlCandidates {
         let official_websites = self.get_string_values_for_property(item, "P856");
         let described_at_url = self.get_string_values_for_property(item, "P973");
         let mut websites: Vec<_> = official_websites
@@ -639,15 +643,15 @@ impl Referee {
             .await
             .into_iter()
             .zip(websites)
-            .filter(|(_url, html)| !html.is_empty())
-            .map(|(url, html)| {
+            .filter(|(html, _url)| !html.is_empty())
+            .map(|(html, url)| {
                 let text = self.html2text(&html);
                 let language = self.guess_page_language_from_text(&text);
                 (
                     url.to_string(),
                     UrlCandidate {
                         url: url.to_string(),
-                        regexp_type: "official-website".to_string(),
+                        url_type: UrlType::DirectWebsite,
                         property: None,
                         external_id: None,
                         language,
@@ -804,7 +808,7 @@ impl Referee {
             }
 
             // Check for reference prop=>value for external-id type
-            if url_candidate.regexp_type == "external-id" {
+            if url_candidate.url_type == UrlType::ExternalId {
                 if let Some(ref_prop) = &url_candidate.property {
                     let snaks_array = snaks
                         .iter()
