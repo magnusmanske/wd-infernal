@@ -925,6 +925,7 @@ impl Referee {
             .into_iter()
             .filter_map(|r| r.ok())
             .flatten()
+            .filter(|r| r.property != Some("P973".to_string())) // Remove references for "described at URL"
             .collect();
         ret.sort();
         let ret = Self::merge_cuc_candidates(ret);
@@ -1030,6 +1031,7 @@ impl Referee {
             }
             "de" => {
                 ret.push(format!("{}. {}. {}", day_num, month_num, year));
+                ret.push(format!("{}.{}.{}", day_num, month_num, year));
             }
             "fr" => {
                 let month_names = [
@@ -1053,6 +1055,7 @@ impl Referee {
             }
             _ => {
                 // Generic formats
+                ret.push(format!("{}. {}. {}", day_num, month_num, year));
                 ret.push(format!("{}.{}.{}", day_num, month_num, year));
                 ret.push(format!("{}/{}/{}", day_num, month_num, year));
             }

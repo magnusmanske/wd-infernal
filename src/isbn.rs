@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use futures::join;
 use grscraper::MetadataRequestBuilder;
 use isbn::{Isbn10, Isbn13};
 use lazy_static::lazy_static;
@@ -6,6 +7,7 @@ use regex::Regex;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
+use std::sync::Mutex;
 
 lazy_static! {
     static ref RE_GOODREADS_ID: Regex = Regex::new(r"/(\d+)\.jpg$").unwrap();
@@ -86,11 +88,11 @@ impl Reference {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct ISBN2wiki {
     pub isbn10: Option<Isbn10>,
     pub isbn13: Option<Isbn13>,
-    pub values: HashMap<String, HashMap<DataValue, HashSet<Reference>>>,
+    pub values: Mutex<HashMap<String, HashMap<DataValue, HashSet<Reference>>>>,
 }
 
 impl ISBN2wiki {
@@ -134,12 +136,13 @@ impl ISBN2wiki {
     }
 
     pub async fn retrieve(&mut self) -> Result<()> {
-        // let _ = self.load_from_goodreads().await; // Ignore errors
-        self.load_from_google_books().await?;
+        let f1 = self.load_from_goodreads();
+        let f2 = self.load_from_google_books();
+        let _ = join!(f1, f2);
         Ok(())
     }
 
-    async fn load_from_google_books(&mut self) -> Result<()> {
+    async fn load_from_google_books(&self) -> Result<()> {
         let isbn = self
             .isbn()
             .ok_or_else(|| anyhow!("No ISBN found"))?
@@ -159,13 +162,13 @@ impl ISBN2wiki {
         self.parse_google_books_xml(&xml)
     }
 
-    fn parse_google_books_xml(&mut self, xml: &str) -> Result<()> {
+    fn parse_google_books_xml(&self, xml: &str) -> Result<()> {
         let xml = xml
             .replace("<dc:title", "<dctitle")
             .replace("</dc:title", "</dctitle"); // To avoid XML namespace problems with serde
 
         let feed: GoogleBooksFeed = serde_xml_rs::from_str(&xml)?;
-        println!("{feed:#?}");
+        // println!("{feed:#?}");
 
         let entry = feed
             .entry
@@ -231,7 +234,7 @@ impl ISBN2wiki {
     }
 
     fn extract_google_book_identifiers(
-        &mut self,
+        &self,
         entry: &GoogleBooksEntry,
     ) -> Result<String, anyhow::Error> {
         let mut google_books_id: Option<String> = None;
@@ -278,7 +281,7 @@ impl ISBN2wiki {
         Ok(google_books_id)
     }
 
-    async fn _load_from_goodreads(&mut self) -> Result<()> {
+    async fn load_from_goodreads(&self) -> Result<()> {
         let isbn = self
             .isbn()
             .ok_or_else(|| anyhow!("No ISBN found"))?
@@ -382,12 +385,14 @@ impl ISBN2wiki {
     }
 
     fn add_reference(
-        &mut self,
+        &self,
         property: &str, //&mut HashMap<DataValue, HashSet<Reference>>,
         value: DataValue,
         reference: Reference,
     ) {
         self.values
+            .lock()
+            .unwrap()
             .entry(property.to_string())
             .or_default()
             .entry(value)
@@ -423,7 +428,7 @@ mod tests {
 
     #[test]
     fn test_parse_google_books_xml() {
-        let mut isbn2wiki = ISBN2wiki::new("9782267027006").unwrap();
+        let isbn2wiki = ISBN2wiki::new("9782267027006").unwrap();
         let xml = include_str!("../test_files/google_books.xml");
         isbn2wiki.parse_google_books_xml(xml).unwrap();
         println!("{:?}", isbn2wiki.values);
