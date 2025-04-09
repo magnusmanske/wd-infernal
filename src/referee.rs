@@ -1005,6 +1005,7 @@ impl Referee {
         month_num: u32,
         day_num: u32,
     ) {
+        ret.push(format!("{year}-{month_num:02}-{day_num:02}")); // ISO
         match language {
             "en" => {
                 let month_names = [
@@ -1026,12 +1027,38 @@ impl Referee {
                 let long_month = month_names.get(month_num as usize).unwrap_or(&"");
                 let short_month = &long_month[0..std::cmp::min(3, long_month.len())];
 
-                ret.push(format!("{} {}, {}", long_month, day_num, year));
-                ret.push(format!("{} {}, {}", short_month, day_num, year));
+                ret.push(format!("{long_month} {day_num}, {year}"));
+                ret.push(format!("{short_month} {day_num}, {year}"));
             }
             "de" => {
-                ret.push(format!("{}. {}. {}", day_num, month_num, year));
-                ret.push(format!("{}.{}.{}", day_num, month_num, year));
+                let month_names = [
+                    "",
+                    "Januar",
+                    "Februar",
+                    "März",
+                    "April",
+                    "Mai",
+                    "Juni",
+                    "Juli",
+                    "August",
+                    "September",
+                    "Oktober",
+                    "November",
+                    "Dezember",
+                ];
+
+                let long_month = month_names.get(month_num as usize).unwrap_or(&"");
+                let short_month = &long_month[0..std::cmp::min(3, long_month.len())];
+
+                ret.push(format!("{day_num}. {long_month} {year}"));
+                ret.push(format!("{day_num}. {short_month} {year}"));
+                ret.push(format!("{day_num:02}. {long_month} {year}"));
+                ret.push(format!("{day_num:02}. {short_month} {year}"));
+
+                ret.push(format!("{day_num}. {month_num}. {year}"));
+                ret.push(format!("{day_num}.{month_num}.{year}"));
+                ret.push(format!("{day_num:02}. {month_num:02}. {year}"));
+                ret.push(format!("{day_num:02}.{month_num:02}.{year}"));
             }
             "fr" => {
                 let month_names = [
@@ -1055,9 +1082,13 @@ impl Referee {
             }
             _ => {
                 // Generic formats
-                ret.push(format!("{}. {}. {}", day_num, month_num, year));
-                ret.push(format!("{}.{}.{}", day_num, month_num, year));
-                ret.push(format!("{}/{}/{}", day_num, month_num, year));
+                ret.push(format!("{day_num}. {month_num}. {year}"));
+                ret.push(format!("{day_num}.{month_num}.{year}"));
+                ret.push(format!("{day_num}/{month_num}/{year}"));
+
+                ret.push(format!("{day_num:02}. {month_num:02}. {year}"));
+                ret.push(format!("{day_num:02}.{month_num:02}.{year}"));
+                ret.push(format!("{day_num:02}/{month_num:02}/{year}"));
             }
         }
     }
