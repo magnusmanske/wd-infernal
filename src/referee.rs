@@ -945,7 +945,6 @@ impl Referee {
             .collect();
         ret.sort();
         let ret = Self::merge_cuc_candidates(ret);
-        let ret = Self::bespoke_cuc_filters(ret);
 
         Ok(ret)
     }
@@ -1112,14 +1111,5 @@ impl Referee {
                 ret.push(format!("{day_num:02}/{month_num:02}/{year}"));
             }
         }
-    }
-
-    fn bespoke_cuc_filters(ret: Vec<ConciseUrlCandidate>) -> Vec<ConciseUrlCandidate> {
-        // Bespoke filters
-        ret.into_iter()
-            .filter(|r| {
-                !(r.property == Some("P27".to_string()) && r.url.contains("www.invaluable.com"))
-            })
-            .collect()
     }
 }
