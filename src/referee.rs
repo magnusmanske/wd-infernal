@@ -20,6 +20,7 @@ lazy_static! {
     static ref RE_WIKI: Regex = Regex::new(r"\b(wikipedia|wikimedia|wik[a-z-]+)\.org/").unwrap();
 }
 
+// URLs containing any of these patterns will not be loaded
 const BAD_URLS: &[&str] = &[
     "://g.co/",
     "viaf.org/",
@@ -27,7 +28,13 @@ const BAD_URLS: &[&str] = &[
     "www.google.com",
     "toolforge.org",
 ];
-const BAD_PROP_STATEMENT: &[(&str, &str)] = &[("P27", "www.invaluable.com")];
+
+// URLs with these parts for statements with these properties will not be loaded
+const BAD_PROP_STATEMENT: &[(&str, &str)] = &[
+    ("P27", "www.invaluable.com"),
+    ("P31", "www.artnet.com"),
+    ("P31", "www.askart.com"),
+];
 
 type UniqueUrlCandidates = HashMap<String, UrlCandidate>;
 
