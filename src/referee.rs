@@ -27,6 +27,7 @@ const BAD_URLS: &[&str] = &[
     "www.google.com",
     "toolforge.org",
 ];
+const BAD_PROP_STATEMENT: &[(&str, &str)] = &[("P27", "www.invaluable.com")];
 
 type UniqueUrlCandidates = HashMap<String, UrlCandidate>;
 
@@ -982,7 +983,7 @@ impl Referee {
                 continue;
             }
 
-            if statement.property == "P27" && url_candidate.url.contains("www.invaluable.com") {
+            if Self::is_bad_combination(statement, url_candidate) {
                 continue;
             }
 
@@ -1115,5 +1116,14 @@ impl Referee {
                 ret.push(format!("{day_num:02}/{month_num:02}/{year}"));
             }
         }
+    }
+
+    fn is_bad_combination(statement: &EntityStatement, url_candidate: &UrlCandidate) -> bool {
+        for (property, url_part) in BAD_PROP_STATEMENT {
+            if statement.property == *property && url_candidate.url.contains(url_part) {
+                return true;
+            }
+        }
+        false
     }
 }
