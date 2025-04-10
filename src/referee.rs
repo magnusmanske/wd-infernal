@@ -73,7 +73,7 @@ pub struct UrlCandidate {
     text: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd, Eq, Ord)]
 pub struct TextPart {
     before: String,
     regexp_match: String,
@@ -946,6 +946,14 @@ impl Referee {
         ret.sort();
         let ret = Self::merge_cuc_candidates(ret);
 
+        // Bespoke filters
+        let ret = ret
+            .into_iter()
+            .filter(|r| {
+                !(r.property == Some("P27".to_string()) && r.url.contains("www.invaluable.com"))
+            })
+            .collect();
+
         Ok(ret)
     }
 
@@ -958,6 +966,10 @@ impl Referee {
             } else {
                 ret.push(current);
             }
+        }
+        for cuc in &mut ret {
+            cuc.texts.sort();
+            cuc.texts.dedup();
         }
         ret
     }
