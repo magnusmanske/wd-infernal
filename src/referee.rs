@@ -982,6 +982,10 @@ impl Referee {
                 continue;
             }
 
+            if statement.property == "P27" && url_candidate.url.contains("www.invaluable.com") {
+                continue;
+            }
+
             let patterns = self
                 .get_statement_search_patterns(statement, &url_candidate.language)
                 .await?;
