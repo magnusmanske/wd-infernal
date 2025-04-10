@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use chrono::prelude::*;
 use futures::future::join_all;
 use futures::join;
@@ -20,7 +20,7 @@ lazy_static! {
     static ref RE_WIKI: Regex = Regex::new(r"\b(wikipedia|wikimedia|wik[a-z-]+)\.org/").unwrap();
 }
 
-const _BAD_URLS: &[&str] = &["://g.co/", "viaf.org/", "wmflabs.org"]; // TODO use this
+const BAD_URLS: &[&str] = &["://g.co/", "viaf.org/", "wmflabs.org", "www.google.com"]; // TODO use this
 
 type UniqueUrlCandidates = HashMap<String, UrlCandidate>;
 
@@ -171,7 +171,17 @@ impl Referee {
         })
     }
 
+    fn validate_url(url: &str) -> Result<()> {
+        for bad_url in BAD_URLS {
+            if url.contains(bad_url) {
+                return Err(anyhow!("Bad URL"));
+            }
+        }
+        Ok(())
+    }
+
     async fn load_contents_from_url(&self, url: &str) -> Result<String> {
+        Self::validate_url(url)?;
         let url = url
             .replace("&amp;", "&")
             .trim()
