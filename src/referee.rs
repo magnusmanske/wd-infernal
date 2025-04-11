@@ -959,6 +959,9 @@ impl Referee {
     }
 
     fn merge_cuc_candidates(mut input: Vec<ConciseUrlCandidate>) -> Vec<ConciseUrlCandidate> {
+        if input.len() < 2 {
+            return input;
+        }
         let mut ret = vec![input.remove(0)];
         for current in input {
             let last = ret.last_mut().unwrap(); //Safe
