@@ -1,3 +1,4 @@
+use crate::isbn::ISBN2wiki;
 use crate::person::Person;
 use crate::referee::Referee;
 use crate::{crosscats::CrossCats, location::Location};
@@ -8,12 +9,14 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use serde_json::json;
 use std::net::SocketAddr;
 use tower_http::{
     compression::CompressionLayer,
     cors::{Any, CorsLayer},
     trace::TraceLayer,
 };
+use wikibase_rest_api::Patch;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Server {}
@@ -30,6 +33,8 @@ impl Server {
             .route("/name_gender/:name", get(Self::name_gender))
             .route("/country_year/:item/:year", get(Self::country_year))
             .route("/referee/:item", get(Self::referee))
+            .route("/isbn/item/:item", get(Self::isbn_item))
+            .route("/isbn/isbn/:isbn", get(Self::isbn_isbn))
             .route(
                 "/cross_categories/:category_item/:language/:depth",
                 get(Self::cross_cats),
@@ -43,7 +48,8 @@ impl Server {
             .layer(cors);
 
         let addr = Self::get_server_address();
-        tracing::debug!("listening on {}", addr);
+        tracing::debug!("listening on {addr}");
+        println!("listening on http://{addr}");
         let listener = tokio::net::TcpListener::bind(addr)
             .await
             .expect("Could not create listener");
@@ -87,6 +93,27 @@ impl Server {
     ) -> Result<impl IntoResponse, StatusCode> {
         let results = CrossCats::cross_cats(&category_item, depth, &language).await?;
         Ok(Json(results))
+    }
+
+    async fn isbn_isbn(Path(isbn): Path<String>) -> Result<impl IntoResponse, StatusCode> {
+        let mut isbn2wiki = ISBN2wiki::new(&isbn).ok_or(StatusCode::NOT_FOUND)?;
+        isbn2wiki
+            .retrieve()
+            .await
+            .map_err(|_| StatusCode::NOT_FOUND)?;
+        let ret = isbn2wiki
+            .generate_item()
+            .map_err(|_| StatusCode::NOT_FOUND)?;
+        let ret = json!({"item": ret});
+        Ok(Json(ret))
+    }
+
+    async fn isbn_item(Path(item): Path<String>) -> Result<impl IntoResponse, StatusCode> {
+        let mut isbn2wiki = ISBN2wiki::new_from_item(&item).await.unwrap();
+        isbn2wiki.retrieve().await.unwrap();
+        let patch = isbn2wiki.generate_patch(&item).unwrap();
+        let ret = patch.patch().to_owned();
+        Ok(Json(ret))
     }
 
     async fn referee(Path(item): Path<String>) -> Result<impl IntoResponse, StatusCode> {
