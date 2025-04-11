@@ -34,6 +34,7 @@ const BAD_PROP_STATEMENT: &[(&str, &str)] = &[
     ("P27", "www.invaluable.com"),
     ("P31", "www.artnet.com"),
     ("P31", "www.askart.com"),
+    ("P373", "."), // Commons category, no point checking any URL
 ];
 
 type UniqueUrlCandidates = HashMap<String, UrlCandidate>;
