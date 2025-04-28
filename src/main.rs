@@ -7,6 +7,7 @@ pub mod location;
 pub mod person;
 pub mod referee;
 pub mod server;
+pub mod viaf;
 pub mod wikidata;
 
 #[tokio::main]
@@ -14,6 +15,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args().len() > 2 {
         let command = std::env::args().nth(1).unwrap();
         match command.as_str() {
+            "viaf" => {
+                let query = std::env::args().nth(2).unwrap();
+                let result = viaf::search_viaf_for_local_names(&query).await.unwrap();
+                println!("{result:#?}");
+            }
             "isbn" => {
                 let item_id = std::env::args().nth(2).unwrap();
                 let mut isbn2wiki = isbn::ISBN2wiki::new_from_item(&item_id).await.unwrap();

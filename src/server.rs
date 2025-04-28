@@ -33,6 +33,7 @@ impl Server {
             .route("/name_gender/:name", get(Self::name_gender))
             .route("/country_year/:item/:year", get(Self::country_year))
             .route("/referee/:item", get(Self::referee))
+            .route("/viaf_search/:query", get(Self::viaf_search))
             .route("/isbn/item/:item", get(Self::isbn_item))
             .route("/isbn/isbn/:isbn", get(Self::isbn_isbn))
             .route(
@@ -114,6 +115,13 @@ impl Server {
         let patch = isbn2wiki.generate_patch(&item).unwrap();
         let ret = patch.patch().to_owned();
         Ok(Json(ret))
+    }
+
+    async fn viaf_search(Path(query): Path<String>) -> Result<impl IntoResponse, StatusCode> {
+        let results = crate::viaf::search_viaf_for_local_names(&query)
+            .await
+            .map_err(|_| StatusCode::NOT_FOUND)?;
+        Ok(Json(results))
     }
 
     async fn referee(Path(item): Path<String>) -> Result<impl IntoResponse, StatusCode> {
