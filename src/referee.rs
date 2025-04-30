@@ -1093,6 +1093,7 @@ impl Referee {
                 ret.push(format!("{day_num}. {long_month} {year}"));
                 ret.push(format!("{day_num:02}. {long_month} {year}"));
                 ret.push(format!("{day_num} {long_month} {year}"));
+                ret.push(format!("{long_month} {day_num}, {year}"));
 
                 if let Some(short_month) = short_month_opt {
                     ret.push(format!("{day_num}. {short_month} {year}"));
