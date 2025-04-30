@@ -16,6 +16,7 @@ use wikibase::{
     SnakDataType, Statement,
 };
 
+/// Temporary struct for parsing months data from JSON
 #[derive(Debug, Deserialize)]
 struct MonthsJsonRow {
     num: String,
@@ -27,27 +28,25 @@ struct MonthsJsonRow {
 lazy_static! {
     static ref RE_WIKI: Regex = Regex::new(r"\b(wikipedia|wikimedia|wik[a-z-]+)\.org/").unwrap();
     static ref MONTHS: HashMap<u32,HashMap<String, (String, Option<String>)>> = {
-    /*
-    To regenerate momnths.json:
+        /*
+        # To regenerate the data, run this query in the Wikidata Query Service,
+        # download as JSON file (not verbose) and save as static/months.json
         SELECT ?num ?language ?llabel ?short {
-          ?month wdt:P31 wd:Q47018901; p:P279 ?statement ;rdfs:label ?label.
-          ?statement ps:P279 wd:Q18602249; pq:P1545 ?num .
-          BIND ( lang(?label) AS ?language ) .
-          BIND ( str(?label) AS ?llabel ) .
-          OPTIONAL { ?month wdt:P1813 ?short_with_language . FILTER ( lang(?short_with_language)=?language ) . BIND ( str(?short_with_language) AS ?short ) }
+            ?month wdt:P31 wd:Q47018901; p:P279 ?statement ;rdfs:label ?label.
+            ?statement ps:P279 wd:Q18602249; pq:P1545 ?num .
+            BIND ( lang(?label) AS ?language ) .
+            BIND ( str(?label) AS ?llabel ) .
+            OPTIONAL { ?month wdt:P1813 ?short_with_language . FILTER ( lang(?short_with_language)=?language ) . BIND ( str(?short_with_language) AS ?short ) }
         }
-    Download as JSON file (not verbose) and save as static/months.json
-    */
+        */
         let json_string = include_str!("../static/months.json");
         let data: Vec<MonthsJsonRow> = serde_json::from_str(json_string).unwrap();
         let mut ret = HashMap::new();
         for row in data {
-            let month_num = match row.num.parse::<u32>() {
-                Ok(num) => num,
-                Err(_) => continue,
+            if let Ok(month_num) = row.num.parse::<u32>() {
+                let value = (row.llabel,row.short);
+                ret.entry(month_num).or_insert(HashMap::new()).insert(row.language, value);
             };
-            let value = (row.llabel,row.short);
-            ret.entry(month_num).or_insert(HashMap::new()).insert(row.language, value);
         }
         ret
     };
