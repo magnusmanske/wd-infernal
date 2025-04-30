@@ -16,8 +16,39 @@ use wikibase::{
     SnakDataType, Statement,
 };
 
+#[derive(Debug, Deserialize)]
+struct MonthsJsonRow {
+    num: String,
+    language: String,
+    llabel: String,
+}
+
 lazy_static! {
     static ref RE_WIKI: Regex = Regex::new(r"\b(wikipedia|wikimedia|wik[a-z-]+)\.org/").unwrap();
+    static ref MONTHS: HashMap<u32,HashMap<String, String>> = {
+    /*
+    To regenerate momnths.json:
+        SELECT ?num ?language ?llabel {
+          ?month wdt:P31 wd:Q47018901; p:P279 ?statement ;rdfs:label ?label.
+          ?statement ps:P279 wd:Q18602249; pq:P1545 ?num .
+          BIND ( lang(?label) AS ?language ) .
+          BIND ( str(?label) AS ?llabel )
+        }
+    Download as JSON file (not verbose)
+    */
+        let json_string = include_str!("../static/months.json");
+        let data: Vec<MonthsJsonRow> = serde_json::from_str(json_string).unwrap();
+        let mut ret = HashMap::new();
+        for row in data {
+            let month_num = match row.num.parse::<u32>() {
+                Ok(num) => num,
+                Err(_) => continue,
+            };
+            ret.entry(month_num).or_insert(HashMap::new()).insert(row.language, row.llabel);
+        }
+        ret
+    };
+
 }
 
 // URLs containing any of these patterns will not be loaded
@@ -1041,90 +1072,31 @@ impl Referee {
         month_num: u32,
         day_num: u32,
     ) {
-        ret.push(format!("{year}-{month_num:02}-{day_num:02}")); // ISO
-        match language {
-            "en" => {
-                let month_names = [
-                    "",
-                    "January",
-                    "February",
-                    "March",
-                    "April",
-                    "May",
-                    "June",
-                    "July",
-                    "August",
-                    "September",
-                    "October",
-                    "November",
-                    "December",
-                ];
+        // ISO format
+        ret.push(format!("{year}-{month_num:02}-{day_num:02}"));
 
-                let long_month = month_names.get(month_num as usize).unwrap_or(&"");
-                let short_month = &long_month[0..std::cmp::min(3, long_month.len())];
+        // Generic formats
+        ret.push(format!("{day_num}. {month_num}. {year}"));
+        ret.push(format!("{day_num}.{month_num}.{year}"));
+        ret.push(format!("{day_num}/{month_num}/{year}"));
 
-                ret.push(format!("{long_month} {day_num}, {year}"));
-                ret.push(format!("{short_month} {day_num}, {year}"));
-            }
-            "de" => {
-                let month_names = [
-                    "",
-                    "Januar",
-                    "Februar",
-                    "März",
-                    "April",
-                    "Mai",
-                    "Juni",
-                    "Juli",
-                    "August",
-                    "September",
-                    "Oktober",
-                    "November",
-                    "Dezember",
-                ];
+        ret.push(format!("{day_num:02}. {month_num:02}. {year}"));
+        ret.push(format!("{day_num:02}.{month_num:02}.{year}"));
+        ret.push(format!("{day_num:02}/{month_num:02}/{year}"));
 
-                let long_month = month_names.get(month_num as usize).unwrap_or(&"");
-                let short_month = &long_month[0..std::cmp::min(3, long_month.len())];
-
+        if let Some(lang_label) = MONTHS.get(&month_num) {
+            if let Some(long_month) = lang_label.get(language) {
                 ret.push(format!("{day_num}. {long_month} {year}"));
-                ret.push(format!("{day_num}. {short_month} {year}"));
                 ret.push(format!("{day_num:02}. {long_month} {year}"));
-                ret.push(format!("{day_num:02}. {short_month} {year}"));
+                ret.push(format!("{day_num} {long_month} {year}"));
 
-                ret.push(format!("{day_num}. {month_num}. {year}"));
-                ret.push(format!("{day_num}.{month_num}.{year}"));
-                ret.push(format!("{day_num:02}. {month_num:02}. {year}"));
-                ret.push(format!("{day_num:02}.{month_num:02}.{year}"));
-            }
-            "fr" => {
-                let month_names = [
-                    "",
-                    "janvier",
-                    "février",
-                    "mars",
-                    "avril",
-                    "mai",
-                    "juin",
-                    "juillet",
-                    "août",
-                    "septembre",
-                    "octobre",
-                    "novembre",
-                    "décembre",
-                ];
-                let long_month = month_names.get(month_num as usize).unwrap_or(&"");
-
-                ret.push(format!("{} {} {}", day_num, long_month, year));
-            }
-            _ => {
-                // Generic formats
-                ret.push(format!("{day_num}. {month_num}. {year}"));
-                ret.push(format!("{day_num}.{month_num}.{year}"));
-                ret.push(format!("{day_num}/{month_num}/{year}"));
-
-                ret.push(format!("{day_num:02}. {month_num:02}. {year}"));
-                ret.push(format!("{day_num:02}.{month_num:02}.{year}"));
-                ret.push(format!("{day_num:02}/{month_num:02}/{year}"));
+                // TODO: Get short month name from Wikidata somehow
+                if ["de", "en"].contains(&language) {
+                    let short_month = &long_month[0..std::cmp::min(3, long_month.len())];
+                    ret.push(format!("{day_num}. {short_month} {year}"));
+                    ret.push(format!("{short_month} {day_num}, {year}"));
+                    ret.push(format!("{day_num:02}. {short_month} {year}"));
+                }
             }
         }
     }
@@ -1136,5 +1108,19 @@ impl Referee {
             }
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_months() {
+        let months = MONTHS.get(&1);
+        assert_eq!(months.unwrap().get("en"), Some(&"January".to_string()));
+        assert_eq!(months.unwrap().get("de"), Some(&"Januar".to_string()));
+        assert_eq!(months.unwrap().get("fr"), Some(&"janvier".to_string()));
+        assert_eq!(months.unwrap().get("es"), Some(&"enero".to_string()));
     }
 }
