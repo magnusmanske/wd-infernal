@@ -21,20 +21,22 @@ struct MonthsJsonRow {
     num: String,
     language: String,
     llabel: String,
+    short: Option<String>,
 }
 
 lazy_static! {
     static ref RE_WIKI: Regex = Regex::new(r"\b(wikipedia|wikimedia|wik[a-z-]+)\.org/").unwrap();
-    static ref MONTHS: HashMap<u32,HashMap<String, String>> = {
+    static ref MONTHS: HashMap<u32,HashMap<String, (String, Option<String>)>> = {
     /*
     To regenerate momnths.json:
-        SELECT ?num ?language ?llabel {
+        SELECT ?num ?language ?llabel ?short {
           ?month wdt:P31 wd:Q47018901; p:P279 ?statement ;rdfs:label ?label.
           ?statement ps:P279 wd:Q18602249; pq:P1545 ?num .
           BIND ( lang(?label) AS ?language ) .
-          BIND ( str(?label) AS ?llabel )
+          BIND ( str(?label) AS ?llabel ) .
+          OPTIONAL { ?month wdt:P1813 ?short_with_language . FILTER ( lang(?short_with_language)=?language ) . BIND ( str(?short_with_language) AS ?short ) }
         }
-    Download as JSON file (not verbose)
+    Download as JSON file (not verbose) and save as static/months.json
     */
         let json_string = include_str!("../static/months.json");
         let data: Vec<MonthsJsonRow> = serde_json::from_str(json_string).unwrap();
@@ -44,7 +46,8 @@ lazy_static! {
                 Ok(num) => num,
                 Err(_) => continue,
             };
-            ret.entry(month_num).or_insert(HashMap::new()).insert(row.language, row.llabel);
+            let value = (row.llabel,row.short);
+            ret.entry(month_num).or_insert(HashMap::new()).insert(row.language, value);
         }
         ret
     };
@@ -1085,14 +1088,13 @@ impl Referee {
         ret.push(format!("{day_num:02}/{month_num:02}/{year}"));
 
         if let Some(lang_label) = MONTHS.get(&month_num) {
-            if let Some(long_month) = lang_label.get(language) {
+            if let Some(long_short) = lang_label.get(language) {
+                let (long_month, short_month_opt) = long_short;
                 ret.push(format!("{day_num}. {long_month} {year}"));
                 ret.push(format!("{day_num:02}. {long_month} {year}"));
                 ret.push(format!("{day_num} {long_month} {year}"));
 
-                // TODO: Get short month name from Wikidata somehow
-                if ["de", "en"].contains(&language) {
-                    let short_month = &long_month[0..std::cmp::min(3, long_month.len())];
+                if let Some(short_month) = short_month_opt {
                     ret.push(format!("{day_num}. {short_month} {year}"));
                     ret.push(format!("{short_month} {day_num}, {year}"));
                     ret.push(format!("{day_num:02}. {short_month} {year}"));
@@ -1117,10 +1119,13 @@ mod tests {
 
     #[test]
     fn test_months() {
-        let months = MONTHS.get(&1);
-        assert_eq!(months.unwrap().get("en"), Some(&"January".to_string()));
-        assert_eq!(months.unwrap().get("de"), Some(&"Januar".to_string()));
-        assert_eq!(months.unwrap().get("fr"), Some(&"janvier".to_string()));
-        assert_eq!(months.unwrap().get("es"), Some(&"enero".to_string()));
+        let months = MONTHS.get(&1).unwrap();
+        assert_eq!(months.get("en").unwrap().0, "January");
+        assert_eq!(months.get("de").unwrap().0, "Januar");
+        assert_eq!(months.get("fr").unwrap().0, "janvier");
+        assert_eq!(months.get("es").unwrap().0, "enero");
+
+        assert_eq!(months.get("en").unwrap().1.as_ref().unwrap(), "Jan");
+        assert_eq!(months.get("de").unwrap().1.as_ref().unwrap(), "Jan");
     }
 }
