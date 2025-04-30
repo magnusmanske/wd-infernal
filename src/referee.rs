@@ -53,6 +53,18 @@ lazy_static! {
 
 }
 
+// Do not generate references for these item types
+const UNSUPPORTED_ENTITY_MARKERS: &[(&str, &str)] = &[
+    ("P31", "Q13442814"), // Scholarly article
+    ("P31", "Q16521"),    // Taxon
+    ("P31", "Q4167836"),  // category
+    ("P31", "Q4167410"),  // disambiguation page
+    ("P31", "Q5296"),     // main page
+];
+
+// Do not create references for these properties
+const NO_REFS_FOR_PROPERTIES: &[&str] = &["P225", "P373", "P973", "P1472", "P1889"];
+
 // URLs containing any of these patterns will not be loaded
 const BAD_URLS: &[&str] = &[
     "://g.co/",
@@ -179,29 +191,11 @@ impl ConciseUrlCandidate {
 pub struct Referee {
     api: Api,
     entities: EntityContainer,
-    no_refs_for_properties: HashSet<String>,
-    unsupported_entity_markers: Vec<(String, String)>,
     client: Client,
 }
 
 impl Referee {
     pub async fn new() -> Result<Self> {
-        let no_refs = vec!["P225", "P373", "P1472", "P1889"]
-            .into_iter()
-            .map(String::from)
-            .collect();
-
-        let unsupported = vec![
-            ("P31", "Q13442814"), // Scholarly article
-            ("P31", "Q16521"),    // Taxon
-            ("P31", "Q4167836"),  // category
-            ("P31", "Q4167410"),  // disambiguation page
-            ("P31", "Q5296"),     // main page
-        ]
-        .into_iter()
-        .map(|(a, b)| (a.to_string(), b.to_string()))
-        .collect();
-
         let client = Client::builder()
             .user_agent(
                 "Mozilla/5.0 (Windows; U; Windows NT 5.1; rv:1.7.3) Gecko/20041001 Firefox/0.10.1",
@@ -213,8 +207,6 @@ impl Referee {
         Ok(Self {
             api: Api::new("https://www.wikidata.org/w/api.php").await?,
             entities: EntityContainer::new(),
-            no_refs_for_properties: no_refs,
-            unsupported_entity_markers: unsupported,
             client,
         })
     }
@@ -278,7 +270,7 @@ impl Referee {
 
         for claim in claims {
             let property = claim.property();
-            if self.no_refs_for_properties.contains(property) {
+            if NO_REFS_FOR_PROPERTIES.contains(&property) {
                 continue;
             }
 
@@ -765,7 +757,7 @@ impl Referee {
     ) -> Result<Vec<String>> {
         let mut ret = Vec::new();
 
-        if self.no_refs_for_properties.contains(&statement.property) {
+        if NO_REFS_FOR_PROPERTIES.contains(&statement.property.as_str()) {
             return Ok(ret);
         }
 
@@ -944,8 +936,8 @@ impl Referee {
             None => return Ok(false),
         };
 
-        for (property, target) in &self.unsupported_entity_markers {
-            if item.has_target_entity(property, target) {
+        for (property, target) in UNSUPPORTED_ENTITY_MARKERS {
+            if item.has_target_entity(*property, *target) {
                 return Ok(false);
             }
         }
@@ -983,7 +975,7 @@ impl Referee {
             .into_iter()
             .filter_map(|r| r.ok())
             .flatten()
-            .filter(|r| r.property != Some("P973".to_string())) // Remove references for "described at URL"
+            // .filter(|r| r.property != Some("P973".to_string())) // Remove references for "described at URL"
             .collect();
         ret.sort();
         let ret = Self::merge_cuc_candidates(ret);
