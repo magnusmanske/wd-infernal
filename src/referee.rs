@@ -1096,6 +1096,14 @@ impl Referee {
             }
         }
 
+        // Add lowercase versions of the date strings
+        let lc = ret
+            .iter()
+            .filter(|s| s.to_lowercase() != **s)
+            .map(|s| s.to_lowercase())
+            .collect::<Vec<_>>();
+        ret.extend(lc);
+
         ret
     }
 
