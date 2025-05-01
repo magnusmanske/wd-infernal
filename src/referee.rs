@@ -50,6 +50,9 @@ lazy_static! {
         }
         ret
     };
+    static ref LANGUAGE_DETECTOR: lingua::LanguageDetector = {
+        lingua::LanguageDetectorBuilder::from_all_languages().build()
+    };
 
 }
 
@@ -79,6 +82,7 @@ const BAD_PROP_STATEMENT: &[(&str, &str)] = &[
     ("P27", "www.invaluable.com"),
     ("P31", "www.artnet.com"),
     ("P31", "www.askart.com"),
+    ("P31", "www.deutsche-digitale-bibliothek.de"),
     ("P373", "."), // Commons category, no point checking any URL
 ];
 
@@ -353,18 +357,20 @@ impl Referee {
         ret
     }
 
-    // fn _new_guess_page_language_from_text(&self, text: &str) -> String {
-    //     let detector = lingua::LanguageDetectorBuilder::from_all_languages().build();
-    //     let detected_language = detector
-    //         .detect_language_of(text)
-    //         .map(|l| l.iso_code_639_1().to_string());
-    //     let detected_language = detected_language.unwrap_or("en".to_string());
-    //     println!("Detected language: {detected_language}");
-    //     detected_language
-    // }
+    fn lingua_guess_page_language_from_text(&self, text: &str) -> String {
+        let detected_language = LANGUAGE_DETECTOR
+            .detect_language_of(text)
+            .map(|l| l.iso_code_639_1().to_string());
+        let detected_language = detected_language.unwrap_or("en".to_string());
+        println!("Detected language: {detected_language}");
+        detected_language
+    }
 
     fn guess_page_language_from_text(&self, text: &str) -> String {
-        // TODO use _new_guess_page_language_from_text
+        self.lingua_guess_page_language_from_text(text)
+    }
+
+    fn _manual_guess_page_language_from_text(&self, text: &str) -> String {
         let mut ret = "en".to_string(); // Default
         let mut candidates = HashMap::new();
 
@@ -803,9 +809,9 @@ impl Referee {
                         ret.push(format!("{}-{}-{}", year, month, day));
 
                         // Add locale-specific formats
-                        Self::add_locale_specific_dates(
-                            language, &mut ret, year, month_num, day_num,
-                        );
+                        let date_patterns =
+                            Self::get_date_patterns(language, year_num, month_num, day_num);
+                        ret.extend(date_patterns);
                     }
                 }
             }
@@ -1059,13 +1065,8 @@ impl Referee {
     //     }
     // }
 
-    fn add_locale_specific_dates(
-        language: &str,
-        ret: &mut Vec<String>,
-        year: &str,
-        month_num: u32,
-        day_num: u32,
-    ) {
+    fn get_date_patterns(language: &str, year: i32, month_num: u32, day_num: u32) -> Vec<String> {
+        let mut ret = Vec::new();
         // ISO format
         ret.push(format!("{year}-{month_num:02}-{day_num:02}"));
 
@@ -1094,6 +1095,8 @@ impl Referee {
                 }
             }
         }
+
+        ret
     }
 
     fn is_bad_combination(statement: &EntityStatement, url_candidate: &UrlCandidate) -> bool {
@@ -1120,5 +1123,23 @@ mod tests {
 
         assert_eq!(months.get("en").unwrap().1.as_ref().unwrap(), "Jan");
         assert_eq!(months.get("de").unwrap().1.as_ref().unwrap(), "Jan");
+    }
+
+    #[tokio::test]
+    async fn test_new_guess_page_language_from_text() {
+        let referee = Referee::new().await.unwrap();
+        assert_eq!(
+            "en",
+            referee.lingua_guess_page_language_from_text("Hello, world!")
+        );
+        assert_eq!(
+            "de",
+            referee.lingua_guess_page_language_from_text("Hallo, Welt!")
+        );
+        assert_eq!(
+            "fr",
+            referee.lingua_guess_page_language_from_text("Bonjour!")
+        );
+        assert_eq!("en", referee.lingua_guess_page_language_from_text("12345"));
     }
 }
