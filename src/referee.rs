@@ -50,9 +50,9 @@ lazy_static! {
         }
         ret
     };
-    static ref LANGUAGE_DETECTOR: lingua::LanguageDetector = {
-        lingua::LanguageDetectorBuilder::from_all_languages().build()
-    };
+    // static ref LANGUAGE_DETECTOR: lingua::LanguageDetector = {
+    //     lingua::LanguageDetectorBuilder::from_all_languages().build()
+    // };
 
 }
 
@@ -357,41 +357,59 @@ impl Referee {
         ret
     }
 
-    fn lingua_guess_page_language_from_text(&self, text: &str) -> String {
-        let detected_language = LANGUAGE_DETECTOR
-            .detect_language_of(text)
-            .map(|l| l.iso_code_639_1().to_string());
-        let detected_language = detected_language.unwrap_or("en".to_string());
-        println!("Detected language: {detected_language}");
-        detected_language
-    }
-
     fn guess_page_language_from_text(&self, text: &str) -> String {
-        self.lingua_guess_page_language_from_text(text)
+        self.manual_guess_page_language_from_text(text)
     }
 
-    fn _manual_guess_page_language_from_text(&self, text: &str) -> String {
+    // fn lingua_guess_page_language_from_text(&self, text: &str) -> String {
+    //     let detected_language = LANGUAGE_DETECTOR
+    //         .detect_language_of(text)
+    //         .map(|l| l.iso_code_639_1().to_string());
+    //     let detected_language = detected_language.unwrap_or("en".to_string());
+    //     println!("Detected language: {detected_language}");
+    //     detected_language
+    // }
+
+    // fn whatlang_guess_page_language_from_text(&self, text: &str) -> String {
+    //     match whatlang::detect(text) {
+    //         Some(info) => {
+    //             println!("{info:?}");
+    //             if info.confidence() > 0.5 {
+    //                 info.lang().code().to_string()
+    //             } else {
+    //                 "en".to_string()
+    //             }
+    //         }
+    //         None => "en".to_string(),
+    //     }
+    // }
+
+    fn manual_guess_page_language_from_text(&self, text: &str) -> String {
         let mut ret = "en".to_string(); // Default
         let mut candidates = HashMap::new();
 
         // Count occurrences of common words in different languages
-        let en_regex = Regex::new(r"\b(he|she|it|is|was|the|a|an)\b").unwrap();
+        let en_regex = Regex::new(r"\b(he|she|it|is|from|to|was|the|a|an|born|died)\b").unwrap();
         candidates.insert("en", en_regex.find_iter(text).count());
 
-        let de_regex = Regex::new(r"\b(er|sie|es|das|ein|eine|war|ist)\b").unwrap();
+        let de_regex =
+            Regex::new(r"\b(er|sie|sind|ist|es|das|ein|eine|war|geboren|gestorben)\b").unwrap();
         candidates.insert("de", de_regex.find_iter(text).count());
 
         let it_regex = Regex::new(r"\b(è|una|della|la|nel|si|su|una|di)\b").unwrap();
         candidates.insert("it", it_regex.find_iter(text).count());
 
-        let fr_regex = Regex::new(r"\b(est|un|une|et|la|il|a|de|par)\b").unwrap();
+        let fr_regex = Regex::new(r"\b(est|un|une|et|le|les|la|il|a|de|par)\b").unwrap();
         candidates.insert("fr", fr_regex.find_iter(text).count());
 
         let es_regex = Regex::new(r"\b(el|es|un|de|a|la|es|conlas|dos)\b").unwrap();
         candidates.insert("es", es_regex.find_iter(text).count());
 
+        // let it_regex = Regex::new(r"\b(io|tu|lei|lui|chi|che|sono||erano)\b").unwrap();
+        // candidates.insert("it", it_regex.find_iter(text).count());
+
         // Find language with highest count
-        let mut best = 5; // Enforce default for incomprehensible text
+        let mut best = 0; // Enforce default for incomprehensible text
         for (language, &count) in &candidates {
             if count <= best {
                 continue;
@@ -1139,16 +1157,18 @@ mod tests {
         let referee = Referee::new().await.unwrap();
         assert_eq!(
             "en",
-            referee.lingua_guess_page_language_from_text("Hello, world!")
+            referee.guess_page_language_from_text("Hello from the world!")
         );
         assert_eq!(
             "de",
-            referee.lingua_guess_page_language_from_text("Hallo, Welt!")
+            referee.guess_page_language_from_text(
+                "Sind die Hühner platt wie Teller, war der Traktor wieder schneller!"
+            )
         );
         assert_eq!(
             "fr",
-            referee.lingua_guess_page_language_from_text("Bonjour!")
+            referee.guess_page_language_from_text("Bonjour le monde!")
         );
-        assert_eq!("en", referee.lingua_guess_page_language_from_text("12345"));
+        assert_eq!("en", referee.guess_page_language_from_text("12345"));
     }
 }

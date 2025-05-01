@@ -31,7 +31,8 @@ urlencoding = "*"
 anyhow = "*"
 goodreads-metadata-scraper = "*"
 isbn = "*"
-lingua = "*"
+# lingua = "*"
+# whatlang = "*"
 wikibase_rest_api = "*"
 wikimisc = { git = "https://github.com/magnusmanske/wikimisc.git" }
 tools_interface = { git = "https://github.com/magnusmanske/tools_interface.git" }
