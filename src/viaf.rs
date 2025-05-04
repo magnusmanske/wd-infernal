@@ -23,6 +23,7 @@ impl RecordId {
 #[derive(Debug, Clone, Serialize)]
 pub struct Record {
     pub id: String,
+    pub label: String,
     pub born: Option<String>,
     pub died: Option<String>,
     pub ids: Vec<RecordId>,
@@ -67,6 +68,7 @@ pub async fn search_viaf_for_local_names(query: &str) -> Result<Vec<Record>> {
     }
 
     let value: Value = response.json().await?;
+    // println!("{:#?}", value);
 
     let records = &value["searchRetrieveResponse"]["records"]["record"];
     let records: Vec<Value> = match records {
@@ -111,8 +113,15 @@ pub async fn search_viaf_for_local_names(query: &str) -> Result<Vec<Record>> {
                 .filter_map(|h| RecordId::from_value(ns, h)),
         );
 
+        let label =
+            match &cluster[nss(ns, "mainHeadings")][nss(ns, "data")][nss(ns, "text")].as_str() {
+                Some(text) => text.to_string(),
+                None => continue,
+            };
+
         let new_record = Record {
             id,
+            label,
             born: cluster[nss(ns, "birthDate")]
                 .as_str()
                 .map(|s| s.to_string()),
