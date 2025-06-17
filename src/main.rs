@@ -1,7 +1,14 @@
+use lazy_static::lazy_static;
 use serde_json::json;
+use toolforge::pool::WikiPool;
 use wikibase_rest_api::Patch as _;
 
+/*
+ssh magnus@login.toolforge.org -L 3306:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
+*/
+
 pub mod crosscats;
+pub mod initial_search;
 pub mod isbn;
 pub mod location;
 pub mod person;
@@ -9,6 +16,15 @@ pub mod referee;
 pub mod server;
 pub mod viaf;
 pub mod wikidata;
+
+/*
+ssh magnus@login.toolforge.org -N -L 3306:s8.web.db.svc.wikimedia.cloud:3306
+ */
+
+lazy_static! {
+    pub static ref WIKI_POOL: WikiPool =
+        WikiPool::new(toolforge::db::Cluster::WEB).expect("Could not create WikiPool");
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -49,6 +65,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let ret = crosscats::CrossCats::cross_cats(&item, depth, &language)
                     .await
                     .unwrap();
+                println!("{ret:#?}");
+            }
+            "initial_search" => {
+                let query = std::env::args().nth(2).unwrap();
+                let is = initial_search::InitialSearch::new(&query).unwrap();
+                let ret = is.run().await.unwrap();
                 println!("{ret:#?}");
             }
             other => {

@@ -36,6 +36,7 @@ isbn = "*"
 wikibase_rest_api = "*"
 wikimisc = { git = "https://github.com/magnusmanske/wikimisc.git" }
 tools_interface = { git = "https://github.com/magnusmanske/tools_interface.git" }
+toolforge = { version = "*", features = ["wikipool"] }
 
 [profile.release]
 opt-level = 3

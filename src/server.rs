@@ -1,3 +1,4 @@
+use crate::initial_search::InitialSearch;
 use crate::isbn::ISBN2wiki;
 use crate::person::Person;
 use crate::referee::Referee;
@@ -36,6 +37,7 @@ impl Server {
             .route("/viaf_search/:query", get(Self::viaf_search))
             .route("/isbn/item/:item", get(Self::isbn_item))
             .route("/isbn/isbn/:isbn", get(Self::isbn_isbn))
+            .route("/initial_search/:query", get(Self::initial_search))
             .route(
                 "/cross_categories/:category_item/:language/:depth",
                 get(Self::cross_cats),
@@ -75,6 +77,12 @@ impl Server {
     async fn root() -> impl IntoResponse {
         let ret = include_str!("../static/root.html");
         Html(ret)
+    }
+
+    async fn initial_search(Path(query): Path<String>) -> Result<impl IntoResponse, StatusCode> {
+        let is = InitialSearch::new(&query).unwrap();
+        let ret = is.run().await.unwrap();
+        Ok(Json(ret))
     }
 
     async fn name_gender(Path(name): Path<String>) -> Result<impl IntoResponse, StatusCode> {
