@@ -80,9 +80,9 @@ impl Server {
     }
 
     async fn initial_search(Path(query): Path<String>) -> Result<impl IntoResponse, StatusCode> {
-        let is =
-            InitialSearch::new(&query.replace('_', " ")).map_err(|_e| StatusCode::BAD_REQUEST)?;
-        let ret = is.run().await.map_err(|_e| StatusCode::BAD_REQUEST)?;
+        let ret = InitialSearch::run(&query)
+            .await
+            .map_err(|_e| StatusCode::BAD_REQUEST)?;
         Ok(Json(ret))
     }
 

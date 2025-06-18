@@ -1,7 +1,8 @@
 use lazy_static::lazy_static;
 use serde_json::json;
-use toolforge::pool::WikiPool;
+use std::fs::File;
 use wikibase_rest_api::Patch as _;
+use wikimisc::toolforge_db::ToolforgeDB;
 
 /*
 ssh magnus@login.toolforge.org -L 3306:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
@@ -22,8 +23,18 @@ ssh magnus@login.toolforge.org -N -L 3306:s8.web.db.svc.wikimedia.cloud:3306
  */
 
 lazy_static! {
-    pub static ref WIKI_POOL: WikiPool =
-        WikiPool::new(toolforge::db::Cluster::WEB).expect("Could not create WikiPool");
+    pub static ref TOOLFORGE_DB: ToolforgeDB = {
+        // ssh magnus@login.toolforge.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
+        let file = match File::open("config.json") {
+            Ok(file) => file,
+            Err(_) => File::open("/data/project/wd-infernal/wd-infernal/config.json").expect("Unable to open config file"),
+        };
+        let reader = std::io::BufReader::new(file);
+        let config: serde_json::Value = serde_json::from_reader(reader).unwrap();
+        let mut ret = ToolforgeDB::default();
+        ret.add_mysql_pool("wikidata",&config["wikidata"]).unwrap();
+        ret
+    };
 }
 
 #[tokio::main]
@@ -69,8 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "initial_search" => {
                 let query = std::env::args().nth(2).unwrap();
-                let is = initial_search::InitialSearch::new(&query).unwrap();
-                let ret = is.run().await.unwrap();
+                let ret = initial_search::InitialSearch::run(&query).await.unwrap();
                 println!("{ret:#?}");
             }
             other => {
