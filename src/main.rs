@@ -18,13 +18,11 @@ pub mod server;
 pub mod viaf;
 pub mod wikidata;
 
-/*
-ssh magnus@login.toolforge.org -N -L 3306:s8.web.db.svc.wikimedia.cloud:3306
- */
-
 lazy_static! {
     pub static ref TOOLFORGE_DB: ToolforgeDB = {
-        // ssh magnus@login.toolforge.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
+        /* For local testing:
+        ssh magnus@login.toolforge.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
+         */
         let file = match File::open("config.json") {
             Ok(file) => file,
             Err(_) => File::open("/data/project/wd-infernal/wd-infernal/config.json").expect("Unable to open config file"),
