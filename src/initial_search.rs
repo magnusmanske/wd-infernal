@@ -27,7 +27,6 @@ impl InitialSearch {
 			AND pl_from=page_id
 			AND pl_target_id=lt_id
 			AND lt_title='Q5')>0";
-        println!("{BASE_SQL}");
         let params = Self::generate_query_parameters(query);
         let mut conn = TOOLFORGE_DB.get_connection("wikidata").await?; //.connect("wikidatawiki").await?;
         let results = conn
@@ -43,7 +42,6 @@ impl InitialSearch {
         let q1 = RE_INITIAL.replace_all(query, "$1%_").to_string(); // 'A%_A%_Saveliev'
         let q2 = RE_INITIAL.replace_all(query, "$1.*? "); // '^A.*? A.*? Saveliev$'
         let q2 = format!("^{q2}$");
-        println!("{q1}\n{q2}");
         params! {
             "q1" => q1,
             "q2" => q2,

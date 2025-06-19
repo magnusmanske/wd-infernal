@@ -4,10 +4,6 @@ use std::fs::File;
 use wikibase_rest_api::Patch as _;
 use wikimisc::toolforge_db::ToolforgeDB;
 
-/*
-ssh magnus@login.toolforge.org -L 3306:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
-*/
-
 pub mod crosscats;
 pub mod initial_search;
 pub mod isbn;
