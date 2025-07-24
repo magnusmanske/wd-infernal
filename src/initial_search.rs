@@ -13,22 +13,48 @@ pub struct InitialSearch {}
 
 impl InitialSearch {
     pub async fn run(query: &str) -> Result<Vec<String>> {
-        const BASE_SQL: &str = r"SELECT DISTINCT concat('Q',`wbit_item_id`) AS `item`
+        let mut results = vec![];
+        let candidate_items = Self::get_candidate_items_from_term_store(query).await?;
+        for chunk in candidate_items.chunks(5000) {
+            results.extend(Self::filter_chunk(chunk).await?);
+        }
+        Ok(results)
+    }
+
+    async fn filter_chunk(chunk: &[String]) -> Result<Vec<String>> {
+        let placeholders: String = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            r#"SELECT DISTINCT `page_title`
+			    FROM page,pagelinks,linktarget
+			    WHERE page_title IN ({placeholders})
+				AND page_namespace=0
+				AND pl_from=page_id
+				AND pl_target_id=lt_id
+				AND lt_title='Q5'"#
+        );
+        let mut conn = TOOLFORGE_DB.get_connection("wikidata").await?;
+        let results = conn
+            .exec_iter(sql, chunk.to_vec())
+            .await?
+            .map_and_drop(from_row::<String>)
+            .await?;
+        drop(conn);
+        Ok(results)
+    }
+
+    async fn get_candidate_items_from_term_store(query: &str) -> Result<Vec<String>> {
+        const BASE_SQL: &str = r#"SELECT DISTINCT concat('Q',`wbit_item_id`) AS `item`
 	    	FROM `wbt_item_terms`,`wbt_term_in_lang`,`wbt_text_in_lang`
 	     	WHERE `wbit_term_in_lang_id`=`wbtl_id`
 	      	AND `wbtl_text_in_lang_id`=`wbxl_id`
 	       	AND `wbxl_text_id` IN (SELECT `wbx_id` FROM `wbt_text`
 	       		WHERE `wbx_text` LIKE :q1
 	         	AND `wbx_text` RLIKE :q2
-	        )
-			# is a human
-			HAVING (SELECT count(*) FROM page,pagelinks,linktarget
-			WHERE page_title=item AND page_namespace=0
-			AND pl_from=page_id
-			AND pl_target_id=lt_id
-			AND lt_title='Q5')>0";
+	        )"#;
         let params = Self::generate_query_parameters(query);
-        let mut conn = TOOLFORGE_DB.get_connection("wikidata").await?; //.connect("wikidatawiki").await?;
+        let mut conn = TOOLFORGE_DB.get_connection("termstore").await?;
         let results = conn
             .exec_iter(BASE_SQL, params)
             .await?

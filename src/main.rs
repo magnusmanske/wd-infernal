@@ -18,6 +18,7 @@ lazy_static! {
     pub static ref TOOLFORGE_DB: ToolforgeDB = {
         /* For local testing:
         ssh magnus@login.toolforge.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
+        ssh magnus@login.toolforge.org -L 3317:termstore.wikidatawiki.analytics.db.svc.wikimedia.cloud:3306 -N &
          */
         let file = match File::open("config.json") {
             Ok(file) => file,
@@ -27,6 +28,7 @@ lazy_static! {
         let config: serde_json::Value = serde_json::from_reader(reader).unwrap();
         let mut ret = ToolforgeDB::default();
         ret.add_mysql_pool("wikidata",&config["wikidata"]).unwrap();
+        ret.add_mysql_pool("termstore",&config["termstore"]).unwrap();
         ret
     };
 }

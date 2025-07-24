@@ -51,8 +51,7 @@ pub async fn search_viaf_for_local_names(query: &str) -> Result<Vec<Record>> {
     // Construct the URL for searching VIAF
     // We specifically look for local.names in the query
     let url = format!(
-        "https://viaf.org/viaf/search?query=local.names+=+{}&maximumRecords=10",
-        encoded_query
+        "https://viaf.org/viaf/search?query=local.names+=+{encoded_query}&maximumRecords=10"
     );
 
     // Make the HTTP request to VIAF

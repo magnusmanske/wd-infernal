@@ -554,15 +554,15 @@ impl Referee {
         let lang = parts[0];
 
         if wiki.ends_with("wiki") {
-            format!("{}.wikipedia.org", lang)
+            format!("{lang}.wikipedia.org")
         } else if wiki.ends_with("wikisource") {
-            format!("{}.wikisource.org", lang)
+            format!("{lang}.wikisource.org")
         } else if wiki.ends_with("wiktionary") {
-            format!("{}.wiktionary.org", lang)
+            format!("{lang}.wiktionary.org")
         } else if wiki.ends_with("wikiquote") {
-            format!("{}.wikiquote.org", lang)
+            format!("{lang}.wikiquote.org")
         } else {
-            format!("{}.wikipedia.org", lang) // Default fallback
+            format!("{lang}.wikipedia.org") // Default fallback
         }
     }
 
@@ -824,7 +824,7 @@ impl Referee {
                         // Add different date formats
 
                         // Add ISO format
-                        ret.push(format!("{}-{}-{}", year, month, day));
+                        ret.push(format!("{year}-{month}-{day}"));
 
                         // Add locale-specific formats
                         let date_patterns =
@@ -1056,7 +1056,7 @@ impl Referee {
                     continue;
                 }
 
-                let re_pattern = format!(r"\b(.{{0,60}})\b({})\b(.{{0,60}})\b", pattern);
+                let re_pattern = format!(r"\b(.{{0,60}})\b({pattern})\b(.{{0,60}})\b");
                 if let Ok(re) = Regex::new(&re_pattern) {
                     if let Some(caps) = re.captures(&url_candidate.text) {
                         let before = caps.get(1).map_or("", |m| m.as_str()).to_string();
