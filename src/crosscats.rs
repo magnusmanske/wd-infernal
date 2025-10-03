@@ -199,8 +199,8 @@ impl CrossCats {
             .iter()
             .filter(|(_q, item)| {
                 item.statements().property("P31").iter().any(|statement| {
-				    !matches!(statement.value(), StatementValue::Value(StatementValueContent::String(s)) if s == "Q4167410") // disambiguation page
-        })
+                    !matches!(statement.value(), StatementValue::Value(StatementValueContent::String(s)) if s == "Q4167410") // disambiguation page
+                })
             })
             .map(|(q, item)| (q, item.sitelinks().get_wiki(&target_wiki)))
             .filter(|(_q, sitelink)| sitelink.is_some())

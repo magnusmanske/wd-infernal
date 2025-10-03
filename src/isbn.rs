@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use futures::join;
 use grscraper::MetadataRequestBuilder;
 use isbn::{Isbn10, Isbn13};
@@ -683,12 +683,10 @@ impl ISBN2wiki {
     }
 
     fn str2digits(isbn: &str) -> Vec<u8> {
-        let isbn_digits = isbn
-            .chars()
+        isbn.chars()
             .filter_map(|c| c.to_digit(10))
             .map(|c| c as u8)
-            .collect::<Vec<u8>>();
-        isbn_digits
+            .collect::<Vec<u8>>()
     }
 }
 
