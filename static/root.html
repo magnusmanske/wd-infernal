@@ -157,6 +157,21 @@
 					<a href="/initial_search/H.M.Manske"> Example </a>
 				</p>
 			</li>
+			<li>
+				<p>
+					<tt>/change_wiki/<i>SOURCE_WIKI</i>/<i>TARGET_WIKI</i></tt>
+				</p>
+				<p>
+					Pass a JSON array with page titles in <i>SOURCE_WIKI</i> as
+					a POST payload. Returns a JSON object with the
+					<i>SOURCE_WIKI</i> titles as keys and the corresponding
+					<i>TARGET_WIKI</i> titles as values.<br />
+					<i>Note:</i> Keys will have spaces instead of underscores.
+				</p>
+				<p>
+					<i>THIS REQUIRES POST!</i>
+				</p>
+			</li>
 		</ul>
 		<p>
 			Code on

@@ -1,7 +1,7 @@
 [package]
 name = "wd-infernal"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 tokio = { version = "*", features = ["full"] }
@@ -35,7 +35,7 @@ isbn = "*"
 # whatlang = "*"
 wikibase_rest_api = "*"
 wikimisc = { git = "https://github.com/magnusmanske/wikimisc.git" }
-tools_interface = { git = "https://github.com/magnusmanske/tools_interface.git" }
+tools_interface = "*"
 # toolforge = { version = "*", features = ["wikipool"] }
 
 [profile.release]

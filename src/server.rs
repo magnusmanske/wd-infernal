@@ -3,12 +3,13 @@ use crate::isbn::ISBN2wiki;
 use crate::person::Person;
 use crate::referee::Referee;
 use crate::{crosscats::CrossCats, location::Location};
+use axum::routing::post;
 use axum::{
+    Json, Router,
     extract::Path,
     http::StatusCode,
     response::{Html, IntoResponse},
     routing::get,
-    Json, Router,
 };
 use serde_json::json;
 use std::net::SocketAddr;
@@ -38,6 +39,7 @@ impl Server {
             .route("/isbn/item/:item", get(Self::isbn_item))
             .route("/isbn/isbn/:isbn", get(Self::isbn_isbn))
             .route("/initial_search/:query", get(Self::initial_search))
+            .route("/change_wiki/:from/:to", post(Self::change_wiki))
             .route(
                 "/cross_categories/:category_item/:language/:depth",
                 get(Self::cross_cats),
@@ -96,6 +98,24 @@ impl Server {
     ) -> Result<impl IntoResponse, StatusCode> {
         let statements = Location::p131(latitude, longitude).await?;
         Ok(Json(statements))
+    }
+
+    // Pass "from" and "to" wikis as parameters
+    // Pass a JSON array of full titles as POST payload
+    async fn change_wiki(
+        Path((from, to)): Path<(String, String)>,
+        Json(payload): Json<serde_json::Value>,
+    ) -> Result<impl IntoResponse, StatusCode> {
+        let full_titles: Vec<String> = payload
+            .as_array()
+            .ok_or(StatusCode::NOT_FOUND)?
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        let cw = crate::change_wiki::ChangeWiki::new(&from, full_titles);
+        let results = cw.convert(&to).await.map_err(|_| StatusCode::NOT_FOUND)?;
+        let results = json!(results);
+        Ok(Json(results))
     }
 
     async fn cross_cats(

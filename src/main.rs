@@ -4,6 +4,7 @@ use std::fs::File;
 use wikibase_rest_api::Patch as _;
 use wikimisc::toolforge_db::ToolforgeDB;
 
+pub mod change_wiki;
 pub mod crosscats;
 pub mod initial_search;
 pub mod isbn;
