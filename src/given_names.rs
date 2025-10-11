@@ -41,11 +41,11 @@ impl GivenNames {
 
     async fn new(api: Api) -> Result<Self> {
         // Load all male and female given names from SPARQL
-        let sparql = r#"SELECT ?q ?qLabel ?gender {
+        let sparql = "SELECT ?q ?qLabel ?gender {
         	VALUES ?gender { wd:Q11879590 wd:Q12308941 } .
          	?q wdt:P31 ?gender .
-          	SERVICE wikibase:label { bd:serviceParam wikibase:language "[AUTO_LANGUAGE],en,mul" }
-           }"#;
+          	SERVICE wikibase:label { bd:serviceParam wikibase:language \"[AUTO_LANGUAGE],en,mul\" }
+           }";
         let json = api.sparql_query(sparql).await?;
         let bindings = json["results"]["bindings"]
             .as_array()
