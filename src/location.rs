@@ -2,8 +2,8 @@ use crate::wikidata::Wikidata;
 use axum::http::StatusCode;
 use wikibase::{Reference, Snak, Statement};
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Location {}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Location;
 
 impl Location {
     pub async fn country_for_location_and_date(
@@ -43,26 +43,22 @@ impl Location {
             };
             let year_from = b["year_from"]["value"]
                 .as_str()
-                .map(|y| y.parse::<i32>().unwrap());
+                .and_then(|y| y.parse::<i32>().ok());
             let year_to = b["year_to"]["value"]
                 .as_str()
-                .map(|y| y.parse::<i32>().unwrap());
+                .and_then(|y| y.parse::<i32>().ok());
             if year_from.is_none() && year_to.is_none() {
                 no_years = Some(country);
-            } else if year_from.is_some() && year_to.is_some() {
-                let year_from = year_from.unwrap();
-                let year_to = year_to.unwrap();
-                if year >= year_from && year <= year_to {
+            } else if let (Some(year_from), Some(year_to)) = (&year_from, &year_to) {
+                if year >= *year_from && year <= *year_to {
                     both_years = Some(country);
                 }
-            } else if year_from.is_some() && year_to.is_none() {
-                let year_from = year_from.unwrap();
+            } else if let (Some(year_from), None) = (year_from, year_to) {
                 if year >= year_from {
                     one_year = Some(country);
                 }
-            } else if year_from.is_some() && year_to.is_some() {
-                let year_to = year_to.unwrap();
-                if year <= year_to {
+            } else if let Some(year_to) = &year_to {
+                if year <= *year_to {
                     one_year = Some(country);
                 }
             }

@@ -35,10 +35,10 @@ fn nss(nsid: usize, postfix: &str) -> String {
 
 pub async fn search_viaf_for_local_names(query: &str) -> Result<Vec<Record>> {
     let mut headers = header::HeaderMap::new();
-    headers.insert(header::ACCEPT, "application/json".parse().unwrap());
+    headers.insert(header::ACCEPT, "application/json".parse()?);
     headers.insert(
         header::USER_AGENT,
-        "Wikidata Infernal Search Client/1.0".parse().unwrap(),
+        "Wikidata Infernal Search Client/1.0".parse()?,
     );
 
     let client = reqwest::Client::builder()
@@ -80,57 +80,55 @@ pub async fn search_viaf_for_local_names(query: &str) -> Result<Vec<Record>> {
     let mut ret: Vec<Record> = Vec::new();
     for record in &records {
         ns += 1;
-        let cluster = &record["recordData"][nss(ns, "VIAFCluster")];
-        let cluster = match cluster {
-            Value::Object(_) => cluster,
-            _ => continue,
-        };
-        let id = match cluster[nss(ns, "Document")]["about"].as_str() {
-            Some(id) => id
-                .trim_end_matches('/')
-                .split('/')
-                .next_back()
-                .unwrap()
-                .to_string(),
+        match extract_local_name(ns, record) {
+            Some(new_record) => ret.push(new_record),
             None => continue,
-        };
-        let main_headings = &cluster[nss(ns, "mainHeadings")][nss(ns, "data")];
-        let main_headings = match main_headings {
-            Value::Object(_) => vec![main_headings.to_owned()],
-            Value::Array(headings) => headings.to_owned(),
-            _ => vec![],
-        };
-
-        let mut ids = vec![RecordId {
-            code: "VIAF".to_string(),
-            id: id.clone(),
-            ..Default::default()
-        }];
-        ids.extend(
-            main_headings
-                .iter()
-                .filter_map(|h| RecordId::from_value(ns, h)),
-        );
-
-        let label =
-            match &cluster[nss(ns, "mainHeadings")][nss(ns, "data")][nss(ns, "text")].as_str() {
-                Some(text) => text.to_string(),
-                None => continue,
-            };
-
-        let new_record = Record {
-            id,
-            label,
-            born: cluster[nss(ns, "birthDate")]
-                .as_str()
-                .map(|s| s.to_string()),
-            died: cluster[nss(ns, "deathDate")]
-                .as_str()
-                .map(|s| s.to_string()),
-            ids,
-        };
-        ret.push(new_record);
+        }
     }
 
     Ok(ret)
+}
+
+fn extract_local_name(ns: usize, record: &Value) -> Option<Record> {
+    let cluster = &record["recordData"][nss(ns, "VIAFCluster")];
+    let cluster = match cluster {
+        Value::Object(_) => cluster,
+        _ => return None,
+    };
+    let id = match cluster[nss(ns, "Document")]["about"].as_str() {
+        Some(id) => id.trim_end_matches('/').split('/').next_back()?.to_string(),
+        None => return None,
+    };
+    let main_headings = &cluster[nss(ns, "mainHeadings")][nss(ns, "data")];
+    let main_headings = match main_headings {
+        Value::Object(_) => vec![main_headings.to_owned()],
+        Value::Array(headings) => headings.to_owned(),
+        _ => vec![],
+    };
+    let mut ids = vec![RecordId {
+        code: "VIAF".to_string(),
+        id: id.clone(),
+        ..Default::default()
+    }];
+    ids.extend(
+        main_headings
+            .iter()
+            .filter_map(|h| RecordId::from_value(ns, h)),
+    );
+    let label = match &cluster[nss(ns, "mainHeadings")][nss(ns, "data")][nss(ns, "text")].as_str() {
+        Some(text) => text.to_string(),
+        None => return None,
+    };
+    let new_record = Record {
+        id,
+        label,
+        born: cluster[nss(ns, "birthDate")]
+            .as_str()
+            .map(|s| s.to_string()),
+        died: cluster[nss(ns, "deathDate")]
+            .as_str()
+            .map(|s| s.to_string()),
+        ids,
+    };
+    Some(new_record)
 }

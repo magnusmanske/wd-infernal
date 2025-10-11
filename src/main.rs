@@ -1,3 +1,44 @@
+#![forbid(unsafe_code)]
+#![allow(clippy::collapsible_if)]
+#![warn(
+    clippy::cognitive_complexity,
+    clippy::dbg_macro,
+    clippy::debug_assert_with_mut_call,
+    clippy::doc_link_with_quotes,
+    clippy::doc_markdown,
+    clippy::empty_line_after_outer_attr,
+    clippy::empty_structs_with_brackets,
+    clippy::float_cmp,
+    clippy::float_cmp_const,
+    clippy::float_equality_without_abs,
+    keyword_idents,
+    clippy::missing_const_for_fn,
+    missing_copy_implementations,
+    missing_debug_implementations,
+    // clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::mod_module_files,
+    non_ascii_idents,
+    noop_method_call,
+    // clippy::option_if_let_else,
+    clippy::print_stderr,
+    clippy::print_stdout,
+    clippy::semicolon_if_nothing_returned,
+    clippy::unseparated_literal_suffix,
+    clippy::shadow_unrelated,
+    // clippy::similar_names,
+    clippy::suspicious_operation_groupings,
+    unused_crate_dependencies,
+    unused_extern_crates,
+    unused_import_braces,
+    clippy::unused_self,
+    clippy::use_debug,
+    clippy::used_underscore_binding,
+    clippy::useless_let_if_seq,
+    // clippy::wildcard_dependencies,
+    clippy::wildcard_imports
+)]
+
 use lazy_static::lazy_static;
 use serde_json::json;
 use std::fs::File;
@@ -21,10 +62,7 @@ lazy_static! {
         ssh magnus@login.toolforge.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
         ssh magnus@login.toolforge.org -L 3317:termstore.wikidatawiki.analytics.db.svc.wikimedia.cloud:3306 -N &
          */
-        let file = match File::open("config.json") {
-            Ok(file) => file,
-            Err(_) => File::open("/data/project/wd-infernal/wd-infernal/config.json").expect("Unable to open config file"),
-        };
+        let file = File::open("config.json").unwrap_or_else(|_| File::open("/data/project/wd-infernal/wd-infernal/config.json").expect("Unable to open config file"));
         let reader = std::io::BufReader::new(file);
         let config: serde_json::Value = serde_json::from_reader(reader).unwrap();
         let mut ret = ToolforgeDB::default();
@@ -36,6 +74,7 @@ lazy_static! {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #![allow(clippy::use_debug, clippy::print_stdout)]
     if std::env::args().len() > 2 {
         let command = std::env::args().nth(1).unwrap();
         match command.as_str() {
@@ -81,7 +120,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{ret:#?}");
             }
             other => {
-                println!("{other} not implemented in main")
+                println!("{other} not implemented in main");
             }
         }
         Ok(())

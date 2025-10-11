@@ -30,8 +30,8 @@ pub struct ItemInfo {
     already_in_category: bool,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub struct CrossCats {}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CrossCats;
 
 impl CrossCats {
     pub async fn cross_cats(

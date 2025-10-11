@@ -2,14 +2,15 @@ use crate::TOOLFORGE_DB;
 use anyhow::Result;
 use lazy_static::lazy_static;
 use regex::Regex;
-use wikimisc::mysql_async::{from_row, params, prelude::Queryable, Params};
+use wikimisc::mysql_async::{Params, from_row, params, prelude::Queryable};
 
 lazy_static! {
     static ref RE_INITIAL: Regex = Regex::new(r"\b([A-Z])\b\.? *").unwrap();
 }
 
 /// Searches for items with a label that matches a human name with initials.
-pub struct InitialSearch {}
+#[derive(Debug, Copy, Clone)]
+pub struct InitialSearch;
 
 impl InitialSearch {
     pub async fn run(query: &str) -> Result<Vec<String>> {

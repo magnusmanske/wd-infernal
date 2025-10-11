@@ -20,10 +20,11 @@ use tower_http::{
 };
 use wikibase_rest_api::Patch;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Server {}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Server;
 
 impl Server {
+    #![allow(clippy::print_stdout)]
     pub async fn start() -> Result<(), Box<dyn std::error::Error>> {
         tracing_subscriber::fmt::init();
 
@@ -55,20 +56,14 @@ impl Server {
         let addr = Self::get_server_address();
         tracing::debug!("listening on {addr}");
         println!("listening on http://{addr}");
-        let listener = tokio::net::TcpListener::bind(addr)
-            .await
-            .expect("Could not create listener");
-        axum::serve(listener, app)
-            .await
-            .expect("Could not start server");
+        let listener = tokio::net::TcpListener::bind(addr).await?;
+        axum::serve(listener, app).await?;
         Ok(())
     }
 
     fn get_server_address() -> SocketAddr {
-        let port: u16 = match std::env::var("WD_INFERNAL_PORT") {
-            Ok(port) => port.as_str().parse::<u16>().unwrap_or(8000),
-            Err(_) => 8000,
-        };
+        let port: u16 = std::env::var("WD_INFERNAL_PORT")
+            .map_or(8000, |port| port.as_str().parse::<u16>().unwrap_or(8000));
 
         let address = [0, 0, 0, 0];
         // TODOO env::var("WD_INFERNAL_ADDRESS")

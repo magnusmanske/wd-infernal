@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::prelude::*;
 use futures::future::join_all;
 use futures::join;
@@ -12,8 +12,8 @@ use std::{
     collections::{HashMap, HashSet},
 };
 use wikibase::{
-    entity_container::EntityContainer, mediawiki::Api, DataValueType, Entity, EntityTrait, Snak,
-    SnakDataType, Statement,
+    DataValueType, Entity, EntityTrait, Snak, SnakDataType, Statement,
+    entity_container::EntityContainer, mediawiki::Api,
 };
 
 /// Temporary struct for parsing months data from JSON
@@ -192,6 +192,7 @@ impl ConciseUrlCandidate {
     }
 }
 
+#[derive(Debug)]
 pub struct Referee {
     api: Api,
     entities: EntityContainer,
@@ -205,8 +206,7 @@ impl Referee {
                 "Mozilla/5.0 (Windows; U; Windows NT 5.1; rv:1.7.3) Gecko/20041001 Firefox/0.10.1",
             )
             .timeout(std::time::Duration::from_secs(10))
-            .build()
-            .unwrap();
+            .build()?;
 
         Ok(Self {
             api: Api::new("https://www.wikidata.org/w/api.php").await?,
@@ -304,7 +304,7 @@ impl Referee {
     //     ret
     // }
 
-    fn html2text(&self, html: &str) -> String {
+    fn html2text(html: &str) -> String {
         // TODO use _other_html2text
         let mut ret = html.to_string();
 
@@ -357,8 +357,8 @@ impl Referee {
         ret
     }
 
-    fn guess_page_language_from_text(&self, text: &str) -> String {
-        self.manual_guess_page_language_from_text(text)
+    fn guess_page_language_from_text(text: &str) -> String {
+        Self::manual_guess_page_language_from_text(text)
     }
 
     // fn lingua_guess_page_language_from_text(&self, text: &str) -> String {
@@ -384,7 +384,7 @@ impl Referee {
     //     }
     // }
 
-    fn manual_guess_page_language_from_text(&self, text: &str) -> String {
+    fn manual_guess_page_language_from_text(text: &str) -> String {
         let mut ret = "en".to_string(); // Default
         let mut candidates = HashMap::new();
 
@@ -421,8 +421,8 @@ impl Referee {
         ret
     }
 
-    async fn get_candidate_urls_from_wikis(&self, item: &Entity) -> UniqueUrlCandidates {
-        let entity = item.id();
+    async fn get_candidate_urls_from_wikis(&self, base_item: &Entity) -> UniqueUrlCandidates {
+        let entity = base_item.id();
         if self.entities.load_entity(&self.api, entity).await.is_err() {
             return HashMap::new();
         }
@@ -442,7 +442,7 @@ impl Referee {
             }
 
             // Load external links for wiki page
-            let server = self.get_web_server_for_wiki(wiki);
+            let server = Self::get_web_server_for_wiki(wiki);
             let url = format!(
                 "https://{}/w/api.php?action=query&prop=extlinks&ellimit=500&elexpandurl=1&format=json&titles={}",
                 server,
@@ -452,22 +452,20 @@ impl Referee {
             wiki_page_to_load.push((wiki.to_string(), page.to_string(), url.to_string()));
         }
 
-        let mut futures = vec![];
+        let mut futures2 = vec![];
         for (_wiki, _page, url) in &wiki_page_to_load {
             let future = self.load_json_from_url(url);
-            futures.push(future);
+            futures2.push(future);
         }
-        // println!("LOADING {} Wiki pages", futures.len());
         let wiki_pages: Vec<serde_json::Value> =
-            join_all(futures).await.into_iter().flatten().collect();
-        // println!("LOADED  {} Wiki pages", wiki_pages.len());
+            join_all(futures2).await.into_iter().flatten().collect();
 
-        let mut futures = vec![];
+        let mut futures3 = vec![];
         for json in &wiki_pages {
             let future = self.generate_url_candidates_for_wiki_page(json);
-            futures.push(future);
+            futures3.push(future);
         }
-        let candidate_urls: Vec<String> = join_all(futures).await.into_iter().flatten().collect();
+        let candidate_urls: Vec<String> = join_all(futures3).await.into_iter().flatten().collect();
 
         let mut futures = vec![];
         for url in &candidate_urls {
@@ -534,8 +532,8 @@ impl Referee {
         if contents.is_empty() {
             return None;
         }
-        let text = self.html2text(&contents);
-        let language = self.guess_page_language_from_text(&text);
+        let text = Self::html2text(&contents);
+        let language = Self::guess_page_language_from_text(&text);
         let ret = UrlCandidate {
             url: url.to_string(),
             url_type: UrlType::WikiExternal,
@@ -549,7 +547,7 @@ impl Referee {
     }
 
     // Helper method: get web server for wiki
-    fn get_web_server_for_wiki(&self, wiki: &str) -> String {
+    fn get_web_server_for_wiki(wiki: &str) -> String {
         let parts: Vec<&str> = wiki.split("wik").collect();
         let lang = parts[0];
 
@@ -669,7 +667,7 @@ impl Referee {
                 None => continue,
             };
 
-            let formatter_urls = self.get_string_values_for_property(&ip, "P1630");
+            let formatter_urls = Self::get_string_values_for_property(&ip, "P1630");
             if formatter_urls.is_empty() {
                 continue;
             }
@@ -706,8 +704,8 @@ impl Referee {
         if contents.is_empty() {
             return None;
         }
-        let text = self.html2text(&contents);
-        let language = self.guess_page_language_from_text(&text);
+        let text = Self::html2text(&contents);
+        let language = Self::guess_page_language_from_text(&text);
         let ret = UrlCandidate {
             url,
             url_type: UrlType::ExternalId,
@@ -720,22 +718,22 @@ impl Referee {
         Some(ret)
     }
 
-    fn get_string_values_for_property(&self, item: &Entity, property: &str) -> Vec<String> {
+    fn get_string_values_for_property(item: &Entity, property: &str) -> Vec<String> {
         item.claims_with_property(property)
             .into_iter()
             .filter_map(|s| {
                 let mainsnak = s.main_snak();
                 let datevalue = mainsnak.data_value().to_owned()?;
                 match datevalue.value() {
-                    wikibase::Value::StringValue(s) => Some(s.to_owned()),
+                    wikibase::Value::StringValue(s2) => Some(s2.to_owned()),
                     _ => None,
                 }
             })
             .collect()
     }
     async fn get_direct_websites(&self, item: &Entity) -> UniqueUrlCandidates {
-        let official_websites = self.get_string_values_for_property(item, "P856");
-        let described_at_url = self.get_string_values_for_property(item, "P973");
+        let official_websites = Self::get_string_values_for_property(item, "P856");
+        let described_at_url = Self::get_string_values_for_property(item, "P973");
         let mut websites: Vec<_> = official_websites
             .into_iter()
             .chain(described_at_url.into_iter())
@@ -754,8 +752,8 @@ impl Referee {
             .zip(websites)
             .filter(|(html, _url)| !html.is_empty())
             .map(|(html, url)| {
-                let text = self.html2text(&html);
-                let language = self.guess_page_language_from_text(&text);
+                let text = Self::html2text(&html);
+                let language = Self::guess_page_language_from_text(&text);
                 (
                     url.to_string(),
                     UrlCandidate {
@@ -901,7 +899,6 @@ impl Referee {
     }
 
     fn does_statement_have_this_reference(
-        &self,
         statement: &EntityStatement,
         url_candidate: &UrlCandidate,
     ) -> bool {
@@ -1039,7 +1036,7 @@ impl Referee {
         };
 
         for url_candidate in url_candidates.values() {
-            if self.does_statement_have_this_reference(statement, url_candidate) {
+            if Self::does_statement_have_this_reference(statement, url_candidate) {
                 continue;
             }
 
@@ -1068,7 +1065,7 @@ impl Referee {
                             regexp_match: matched,
                             after,
                         };
-                        ret.push(ConciseUrlCandidate::new(&statement_id, url_candidate, &tp))
+                        ret.push(ConciseUrlCandidate::new(&statement_id, url_candidate, &tp));
                     }
                 }
             }
@@ -1154,21 +1151,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_new_guess_page_language_from_text() {
-        let referee = Referee::new().await.unwrap();
         assert_eq!(
             "en",
-            referee.guess_page_language_from_text("Hello from the world!")
+            Referee::guess_page_language_from_text("Hello from the world!")
         );
         assert_eq!(
             "de",
-            referee.guess_page_language_from_text(
+            Referee::guess_page_language_from_text(
                 "Sind die Hühner platt wie Teller, war der Traktor wieder schneller!"
             )
         );
         assert_eq!(
             "fr",
-            referee.guess_page_language_from_text("Bonjour le monde!")
+            Referee::guess_page_language_from_text("Bonjour le monde!")
         );
-        assert_eq!("en", referee.guess_page_language_from_text("12345"));
+        assert_eq!("en", Referee::guess_page_language_from_text("12345"));
     }
 }

@@ -103,7 +103,7 @@ impl Reference {
         }
     }
 
-    fn none() -> Self {
+    const fn none() -> Self {
         Reference {
             property: None,
             value: None,
@@ -199,14 +199,8 @@ impl ISBN2wiki {
         let isbn_10: Option<[u8; 10]> = Self::vec2array(isbn_digits.to_owned()).ok();
         let isbn_13: Option<[u8; 13]> = Self::vec2array(isbn_digits.to_owned()).ok();
         let mut ret = ISBN2wiki {
-            isbn10: match isbn_10 {
-                Some(isbn_array) => Isbn10::new(isbn_array).ok(),
-                None => None,
-            },
-            isbn13: match isbn_13 {
-                Some(isbn_array) => Isbn13::new(isbn_array).ok(),
-                None => None,
-            },
+            isbn10: isbn_10.and_then(|isbn_array| Isbn10::new(isbn_array).ok()),
+            isbn13: isbn_13.and_then(|isbn_array| Isbn13::new(isbn_array).ok()),
             ..Default::default()
         };
 
@@ -378,7 +372,7 @@ impl ISBN2wiki {
                 "P225",
                 DataValue::String(creator.to_owned()),
                 Reference::prop("P675", &google_books_id),
-            )
+            );
         }
 
         Ok(())
@@ -481,7 +475,7 @@ impl ISBN2wiki {
                     precision,
                 },
                 Reference::prop("P8383", &goodreads_work_id),
-            )
+            );
         }
 
         for contributor in metadata.contributors {
@@ -490,7 +484,7 @@ impl ISBN2wiki {
                     "P225",
                     DataValue::String(contributor.name.to_owned()),
                     Reference::prop("P8383", &goodreads_work_id),
-                )
+                );
             }
         }
 
@@ -502,13 +496,13 @@ impl ISBN2wiki {
             );
         }
 
-        let language_code = match &metadata.language {
-            Some(language) => match LANGUAGE_LABELS.get(language) {
+        let language_code = metadata
+            .language
+            .as_ref()
+            .map_or("", |language| match LANGUAGE_LABELS.get(language) {
                 Some(code) => code,
                 None => "",
-            },
-            None => "",
-        };
+            });
 
         if !language_code.is_empty() {
             self.add_reference(
@@ -528,7 +522,7 @@ impl ISBN2wiki {
                         language: language_code.to_owned(),
                     },
                     Reference::prop("P8383", &goodreads_work_id),
-                )
+                );
             }
         }
 
@@ -560,14 +554,14 @@ impl ISBN2wiki {
                 "P957",
                 DataValue::String(isbn.hyphenate().ok()?.to_string()),
                 Reference::default(), // No reference for ISBN
-            )
+            );
         }
         if let Some(isbn) = self.isbn13 {
             self.add_reference(
                 "P212",
                 DataValue::String(isbn.hyphenate().ok()?.to_string()),
                 Reference::default(), // No reference for ISBN
-            )
+            );
         }
         Some(())
     }
@@ -585,7 +579,7 @@ impl ISBN2wiki {
                 let mut statement = Statement::default();
                 statement.set_property(PropertyType::property(property.to_owned()));
                 statement.set_value(expected_value);
-                self.add_new_references_to_statement(&mut statement, references);
+                Self::add_new_references_to_statement(&mut statement, references);
                 ret.statements_mut()
                     .statements_mut()
                     .entry(property.to_owned())
@@ -642,13 +636,13 @@ impl ISBN2wiki {
                 // Only one or no statements, add references to existing,
                 // or create new statement with references
                 match statements.first_mut() {
-                    Some(statement) => self.add_new_references_to_statement(statement, references),
+                    Some(statement) => Self::add_new_references_to_statement(statement, references),
                     None => {
                         let mut statement = Statement::default();
                         statement.new_id_for_entity(&entity_id);
                         statement.set_property(PropertyType::property(property.to_owned()));
                         statement.set_value(expected_value);
-                        self.add_new_references_to_statement(&mut statement, references);
+                        Self::add_new_references_to_statement(&mut statement, references);
                         drop(statements);
                         statements_new
                             .statements_mut()
@@ -664,11 +658,7 @@ impl ISBN2wiki {
         Ok(patch)
     }
 
-    fn add_new_references_to_statement(
-        &self,
-        statement: &mut Statement,
-        references: &HashSet<Reference>,
-    ) {
+    fn add_new_references_to_statement(statement: &mut Statement, references: &HashSet<Reference>) {
         for reference in references {
             if !statement
                 .references()
@@ -699,7 +689,7 @@ mod tests {
         let isbn2wiki = ISBN2wiki::new("9782267027006").unwrap();
         let xml = include_str!("../test_files/google_books.xml");
         isbn2wiki.parse_google_books_xml(xml).unwrap();
-        println!("{:?}", isbn2wiki.values);
+        // println!("{:?}", isbn2wiki.values);
         // TODO actually compare the parsed values with the expected values
     }
 }

@@ -5,15 +5,15 @@ use wikibase::{Reference, Snak, Statement};
 
 use crate::wikidata::Wikidata;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Person {}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Person;
 
 impl Person {
     pub async fn name_gender(name: &str) -> Result<Vec<Statement>, StatusCode> {
         let mut statements = vec![];
         let mut parts = name.split_whitespace().collect::<Vec<_>>();
         let last_name = match parts.pop() {
-            Some(name) => name,
+            Some(last_name) => last_name,
             None => return Ok(statements), // No name, return empty set
         };
         let first_names = parts;

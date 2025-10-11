@@ -4,6 +4,7 @@ use wikimisc::mysql_async::{from_row, prelude::Queryable};
 
 use crate::TOOLFORGE_DB;
 
+#[derive(Debug)]
 pub struct ChangeWiki {
     wiki_from: String,
     titles: Vec<String>,

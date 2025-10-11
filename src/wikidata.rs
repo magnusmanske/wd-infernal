@@ -1,10 +1,10 @@
 use axum::http::StatusCode;
-use mediawiki::{hashmap, Api};
+use mediawiki::{Api, hashmap};
 use std::collections::HashMap;
 use wikibase::Snak;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Wikidata {}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Wikidata;
 
 impl Wikidata {
     pub fn infernal_reference_snak() -> Snak {
@@ -12,10 +12,8 @@ impl Wikidata {
     }
 
     pub async fn get_wikidata_api() -> Result<Api, StatusCode> {
-        match Api::new("https://www.wikidata.org/w/api.php").await {
-            Ok(api) => Ok(api),
-            Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
-        }
+        (Api::new("https://www.wikidata.org/w/api.php").await)
+            .map_or_else(|_| Err(StatusCode::INTERNAL_SERVER_ERROR), Ok)
     }
 
     pub async fn search_items(api: &Api, query: &str) -> Result<Vec<String>, StatusCode> {
@@ -34,7 +32,7 @@ impl Wikidata {
         };
         let results: Vec<String> = results
             .iter()
-            .map(|result| result["title"].as_str().unwrap().to_owned())
+            .filter_map(|result| result["title"].as_str().map(|s| s.to_string()))
             .collect();
         Ok(results)
     }
@@ -61,7 +59,7 @@ impl Wikidata {
         };
         let results: Vec<String> = results
             .iter()
-            .map(|result| result["title"].as_str().unwrap().to_owned())
+            .filter_map(|result| result["title"].as_str().map(|s| s.to_string()))
             .collect();
         if results.is_empty() {
             return Ok(results);
