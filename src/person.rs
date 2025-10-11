@@ -1,10 +1,7 @@
 use crate::{given_names::GivenNames, wikidata::Wikidata};
 use axum::http::StatusCode;
 use futures::future::join_all;
-use lazy_static::lazy_static;
 use mediawiki::Api;
-use std::sync::Arc;
-use tokio::sync::OnceCell;
 use wikibase::{Reference, Snak, Statement};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
