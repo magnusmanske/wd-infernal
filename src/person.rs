@@ -56,6 +56,19 @@ impl Person {
         api: &Api,
         statements: &mut Vec<Statement>,
     ) -> Result<(), StatusCode> {
+        if true {
+            Self::add_first_names_gender_via_search(first_names, api, statements).await
+        } else {
+            // Not in use yet
+            Self::add_first_names_gender_using_given_names(first_names, statements).await
+        }
+    }
+
+    async fn add_first_names_gender_via_search(
+        first_names: Vec<&str>,
+        api: &Api,
+        statements: &mut Vec<Statement>,
+    ) -> Result<(), StatusCode> {
         let mut results = join_all([
             Self::get_given_names_for_gender(&first_names, api, "Q12308941"), // Male given name
             Self::get_given_names_for_gender(&first_names, api, "Q11879590"), // Female given name
@@ -100,27 +113,10 @@ impl Person {
     }
 
     // Not in use now, some error with the SPARQL in GivenNames
-    async fn _add_first_names_gender_using_cached_given_names(
+    async fn add_first_names_gender_using_given_names(
         first_names: Vec<&str>,
         statements: &mut Vec<Statement>,
     ) -> Result<(), StatusCode> {
-        // let mut results = join_all([
-        //     Self::get_given_names_for_gender(&first_names, api, "Q12308941"), // Male given name
-        //     Self::get_given_names_for_gender(&first_names, api, "Q11879590"), // Female given name
-        // ])
-        // .await;
-        // let mut female = results.pop().unwrap()?;
-        // let mut male = results.pop().unwrap()?;
-        // let both: Vec<_> = male
-        //     .iter()
-        //     .filter(|x| female.contains(x))
-        //     .cloned()
-        //     .collect();
-        // male.retain(|x| !both.contains(x));
-        // female.retain(|x| !both.contains(x));
-        // // println!("Male: {male:?}\nFemale: {female:?}\nBoth: {both:?}");
-        // let is_male = !male.is_empty();
-        // let is_female = !female.is_empty();
         let gn = GivenNames::get_static().await;
         let is_male = first_names.iter().any(|x| gn.is_male(x));
         let is_female = first_names.iter().any(|x| gn.is_female(x));
