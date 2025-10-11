@@ -47,6 +47,7 @@ use wikimisc::toolforge_db::ToolforgeDB;
 
 pub mod change_wiki;
 pub mod crosscats;
+pub mod given_names;
 pub mod initial_search;
 pub mod isbn;
 pub mod location;
@@ -89,6 +90,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 isbn2wiki.retrieve().await.unwrap();
                 let patch = isbn2wiki.generate_patch(&item_id).unwrap();
                 println!("{}", json!(patch.patch()));
+            }
+            "name_gender" => {
+                let item_id = std::env::args().nth(2).unwrap();
+                let statements = person::Person::name_gender(&item_id).await.unwrap();
+                println!("{statements:?}");
             }
             "referee" => {
                 let item = std::env::args().nth(2).unwrap();
