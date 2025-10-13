@@ -3,6 +3,7 @@ use crate::isbn::ISBN2wiki;
 use crate::person::Person;
 use crate::referee::Referee;
 use crate::{crosscats::CrossCats, location::Location};
+use axum::extract::Query;
 use axum::routing::post;
 use axum::{
     Json, Router,
@@ -11,6 +12,7 @@ use axum::{
     response::{Html, IntoResponse},
     routing::get,
 };
+use serde::Deserialize;
 use serde_json::json;
 use std::net::SocketAddr;
 use tower_http::{
@@ -19,6 +21,11 @@ use tower_http::{
     trace::TraceLayer,
 };
 use wikibase_rest_api::Patch;
+
+#[derive(Deserialize)]
+struct Format {
+    format: Option<String>,
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Server;
@@ -76,11 +83,40 @@ impl Server {
         Html(ret)
     }
 
-    async fn initial_search(Path(query): Path<String>) -> Result<impl IntoResponse, StatusCode> {
+    fn items2table(items: &[String]) -> String {
+        let mut html = items
+            .iter()
+            .enumerate()
+            .map(|(num, q)| {
+                format!(
+                    "<tr><th>{}</th><td><a q='{q}'>{q}</a></td><td><tt>{q}</tt></td></tr>",
+                    num + 1
+                )
+            })
+            .collect::<Vec<String>>()
+            .join("\n");
+        html = format!(
+            "<table class='table table-striped'><thead><th>#</th><th>Label</th><th>Item</th></thead><tbody>{html}</tbody></table>"
+        );
+        html
+    }
+
+    async fn initial_search(
+        Path(query): Path<String>,
+        params: Query<Format>,
+    ) -> Result<impl IntoResponse, StatusCode> {
         let ret = InitialSearch::run(&query)
             .await
             .map_err(|_e| StatusCode::BAD_REQUEST)?;
-        Ok(Json(ret))
+        match params.format.as_deref() {
+            Some("html") => {
+                let mut html = Self::items2table(&ret);
+                html = format!("<h1>Results</h1><div class='row'>{html}</div>");
+                html = include_str!("../static/result.html").replace("%%RESULT%%", &html);
+                Ok(Html(html).into_response())
+            }
+            _ => Ok(Json(ret).into_response()),
+        }
     }
 
     async fn name_gender(Path(name): Path<String>) -> Result<impl IntoResponse, StatusCode> {

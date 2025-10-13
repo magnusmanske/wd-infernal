@@ -1,0 +1,52 @@
+<html>
+	<head>
+		<meta name="ROBOTS" content="NOINDEX, NOFOLLOW" />
+		<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<link rel="icon" href="favicon.png" type="image/png" />
+		<link
+			rel="stylesheet"
+			href="https://tools-static.wmflabs.org/cdnjs/ajax/libs/twitter-bootstrap/4.0.0/css/bootstrap.min.css"
+		/>
+		<link
+			rel="stylesheet"
+			href="https://tools-static.wmflabs.org/magnustools/resources/html/wikimedia.css"
+		/>
+		<script src="https://tools-static.wmflabs.org/cdnjs/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+		<script src="https://tools-static.wmflabs.org/cdnjs/ajax/libs/twitter-bootstrap/4.0.0/js/bootstrap.bundle.min.js"></script>
+
+		<script src="https://tools-static.wmflabs.org/cdnjs/ajax/libs/vue/2.5.13/vue.min.js"></script>
+		<script src="https://tools-static.wmflabs.org/cdnjs/ajax/libs/vue-router/3.0.1/vue-router.min.js"></script>
+		<script src="https://tools-static.wmflabs.org/magnustools/resources/js/wikidata.js"></script>
+		<script src="https://tools-static.wmflabs.org/magnustools/resources/vue/shared.js"></script>
+		<title>Result</title>
+	</head>
+	<body>
+		<div class="container">%%RESULT%%</div>
+	</body>
+	<script>
+		var wd = new WikiData();
+
+		function updateResultLabels() {
+			let qs = [];
+			$("a[q]").each(function (index, element) {
+				let q = element.getAttribute("q");
+				qs.push(q);
+			});
+			wd.getItemBatch(qs, function () {
+				qs.forEach(function (q) {
+					let key = "a[q='" + q + "']";
+					$(key)
+						.attr("href", "https://www.wikidata.org/wiki/" + q)
+						.attr("target", "_blank");
+					let i = wd.getItem(q);
+					if (i === undefined) return;
+					let label = i.getLabel("en");
+					$(key).text(label);
+				});
+			});
+		}
+
+		updateResultLabels();
+	</script>
+</html>
