@@ -65,12 +65,15 @@ lazy_static! {
         ssh magnus@login.toolforge.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
         ssh magnus@login.toolforge.org -L 3317:termstore.wikidatawiki.analytics.db.svc.wikimedia.cloud:3306 -N &
          */
-        let file = File::open("config.json").unwrap_or_else(|_| File::open("/data/project/wd-infernal/wd-infernal/config.json").expect("Unable to open config file"));
-        let reader = std::io::BufReader::new(file);
-        let config: serde_json::Value = serde_json::from_reader(reader).unwrap();
+
         let mut ret = ToolforgeDB::default();
-        ret.add_mysql_pool("wikidata",&config["wikidata"]).unwrap();
-        ret.add_mysql_pool("termstore",&config["termstore"]).unwrap();
+        let file = File::open("config.json").or_else(|_| File::open("/data/project/wd-infernal/wd-infernal/config.json"));
+        if let Ok(file) = file {
+            let reader = std::io::BufReader::new(file);
+            let config: serde_json::Value = serde_json::from_reader(reader).unwrap();
+            ret.add_mysql_pool("wikidata",&config["wikidata"]).unwrap();
+            ret.add_mysql_pool("termstore",&config["termstore"]).unwrap();
+        }
         ret
     };
 }
