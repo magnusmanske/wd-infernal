@@ -1,8 +1,7 @@
+use crate::TOOLFORGE_DB;
 use anyhow::Result;
 use std::collections::HashMap;
 use wikimisc::mysql_async::{from_row, prelude::Queryable};
-
-use crate::TOOLFORGE_DB;
 
 #[derive(Debug)]
 pub struct ChangeWiki {
