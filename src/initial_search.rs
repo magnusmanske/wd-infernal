@@ -86,6 +86,10 @@ impl InitialSearch {
 mod tests {
     use super::*;
 
+    async fn check_db_connection() -> bool {
+        TOOLFORGE_DB.get_connection("termstore").await.is_ok()
+    }
+
     #[test]
     fn test_generate_query_parameters() {
         let query = "A.A.Saveliev";
@@ -99,6 +103,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_initial_search() {
+        if !check_db_connection().await {
+            // No DB connection
+            return;
+        }
         let query = "H.M.Manske";
         let results = InitialSearch::run(query).await.unwrap();
         assert_eq!(results.len(), 1);

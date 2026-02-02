@@ -106,8 +106,16 @@ impl ChangeWiki {
 mod tests {
     use super::*;
 
+    async fn check_db_connection() -> bool {
+        TOOLFORGE_DB.get_connection("termstore").await.is_ok()
+    }
+
     #[tokio::test]
     async fn test_wd2site() {
+        if !check_db_connection().await {
+            // No DB connection
+            return;
+        }
         let change_wiki = ChangeWiki::new("wikidatawiki", vec!["Q13520818".to_string()]);
         let result = change_wiki.wd2site("enwiki").await.unwrap();
         assert_eq!(result.len(), 1);
@@ -116,6 +124,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_site2wd() {
+        if !check_db_connection().await {
+            // No DB connection
+            return;
+        }
         let change_wiki = ChangeWiki::new("enwiki", vec!["Magnus_Manske".to_string()]);
         let result = change_wiki.site2wd().await.unwrap();
         assert_eq!(result.len(), 1);
