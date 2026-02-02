@@ -1,189 +1,24 @@
+use crate::google_books::GoogleBooksFeed;
+use crate::reference::{DataValue, Reference};
 use anyhow::{Result, anyhow};
-use futures::join;
 use grscraper::MetadataRequestBuilder;
 use isbn::{Isbn10, Isbn13};
 use lazy_static::lazy_static;
 use regex::Regex;
-use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::sync::Mutex;
 use wikibase_rest_api::prelude::*;
-use wikibase_rest_api::property_value::PropertyValue;
 use wikibase_rest_api::statements_patch::StatementsPatch;
 
 lazy_static! {
     static ref RE_GOODREADS_ID: Regex = Regex::new(r"/(\d+)\.jpg$").unwrap();
-    static ref RE_GOOGLE_BOOKS_ID: Regex = Regex::new(r"^([a-zA-Z0-9]+)$").unwrap();
-    static ref RE_ISBN_10: Regex = Regex::new(r"^ISBN:(\d{9}[0-9X])$").unwrap();
-    static ref RE_ISBN_13: Regex = Regex::new(r"^ISBN:(\d{12}[0-9X])$").unwrap();
-    static ref RE_PAGES: Regex = Regex::new(r"^(\d+) pages$").unwrap();
     static ref RE_YEAR: Regex = Regex::new(r"^(\d{4})$").unwrap();
     static ref LANGUAGE_LABELS: HashMap<String, String> = {
         let json_string = include_str!("../static/languages.json");
         let data: HashMap<String, String> = serde_json::from_str(json_string).unwrap();
         data
     };
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-struct GoogleBooksEntry {
-    id: Vec<String>,
-    title: String,
-    #[serde(default)]
-    identifier: Vec<String>,
-    #[serde(default)]
-    dctitle: Vec<String>,
-    #[serde(default)]
-    date: Vec<String>,
-    #[serde(default)]
-    format: Vec<String>,
-    #[serde(default)]
-    creator: Vec<String>,
-    #[serde(default)]
-    language: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-struct GoogleBooksFeed {
-    entry: Vec<GoogleBooksEntry>,
-}
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum DataValue {
-    Monolingual {
-        label: String,
-        language: String,
-    },
-    String(String),
-    Entity(String),
-    Date {
-        time: String,
-        precision: TimePrecision,
-    },
-    Quantity(i64),
-}
-
-impl DataValue {
-    fn as_statement_value(&self) -> StatementValue {
-        let svc = match self {
-            DataValue::Monolingual { label, language } => StatementValueContent::MonolingualText {
-                language: language.to_string(),
-                text: label.to_string(),
-            },
-            DataValue::String(s) => StatementValueContent::String(s.to_string()),
-            DataValue::Entity(e) => StatementValueContent::String(e.to_string()),
-            DataValue::Date { time, precision } => StatementValueContent::Time {
-                time: time.to_string(),
-                precision: precision.to_owned(),
-                calendarmodel: GREGORIAN_CALENDAR.to_string(),
-            },
-            DataValue::Quantity(amount) => StatementValueContent::Quantity {
-                amount: format!("{amount}"),
-                unit: "".to_string(),
-            },
-        };
-        StatementValue::Value(svc)
-    }
-}
-
-#[derive(Debug, Clone, Default, Hash, PartialEq, Eq)]
-pub struct Reference {
-    property: Option<String>,
-    value: Option<String>,
-    url: Option<String>,
-}
-
-impl Reference {
-    fn prop(property: &str, value: &str) -> Self {
-        Reference {
-            property: Some(property.to_string()),
-            value: Some(value.to_string()),
-            url: None,
-        }
-    }
-
-    const fn none() -> Self {
-        Reference {
-            property: None,
-            value: None,
-            url: None,
-        }
-    }
-
-    fn _url(url: &str) -> Self {
-        Reference {
-            property: None,
-            value: None,
-            url: Some(url.to_string()),
-        }
-    }
-
-    fn is_equivalent(&self, reference: &wikibase_rest_api::Reference) -> bool {
-        if let (Some(property), Some(value)) = (&self.property, &self.value) {
-            reference.parts().iter().any(|prop_value| {
-                let ref_prop = prop_value.property().id();
-                let ref_value = match prop_value.value() {
-                    StatementValue::Value(statement_value_content) => statement_value_content,
-                    _ => return false,
-                };
-                let ref_value = match ref_value {
-                    StatementValueContent::String(s) => s,
-                    _ => return false,
-                    // StatementValueContent::Time { time, precision, calendarmodel } => todo!(),
-                    // StatementValueContent::Location { latitude, longitude, precision, globe } => todo!(),
-                    // StatementValueContent::Quantity { amount, unit } => todo!(),
-                    // StatementValueContent::MonolingualText { language, text } => todo!(),
-                };
-                property == ref_prop && value == ref_value
-            })
-        } else if let Some(url) = &self.url {
-            reference.parts().iter().any(|prop_value| {
-                let ref_prop = prop_value.property().id();
-                let ref_value = match prop_value.value() {
-                    StatementValue::Value(statement_value_content) => statement_value_content,
-                    _ => return false,
-                };
-                let ref_value = match ref_value {
-                    StatementValueContent::String(s) => s,
-                    _ => return false,
-                };
-                ref_prop == "P854" && url == ref_value
-            })
-        } else {
-            false
-        }
-    }
-
-    fn as_ref_group(&self) -> Option<wikibase_rest_api::Reference> {
-        let mut ret = wikibase_rest_api::Reference::default();
-        if let (Some(property), Some(value)) = (&self.property, &self.value) {
-            let p = PropertyType::new(
-                property.to_owned(),
-                Some(wikibase_rest_api::DataType::String),
-            );
-            let v = StatementValue::Value(StatementValueContent::String(value.to_owned()));
-            let pv = PropertyValue::new(p, v);
-            ret.parts_mut().push(pv);
-        } else if let Some(url) = &self.url {
-            let p = PropertyType::new("P854", Some(wikibase_rest_api::DataType::Url));
-            let v = StatementValue::Value(StatementValueContent::String(url.to_owned()));
-            let pv = PropertyValue::new(p, v);
-            ret.parts_mut().push(pv);
-        } else {
-            return None;
-        }
-
-        let p = PropertyType::new("P813", Some(wikibase_rest_api::DataType::Time));
-        let v = StatementValue::Value(StatementValueContent::Time {
-            time: chrono::Utc::now().format("+%Y-%m-%dT00:00:00Z").to_string(),
-            precision: TimePrecision::Day,
-            calendarmodel: GREGORIAN_CALENDAR.to_string(),
-        });
-        let pv = PropertyValue::new(p, v);
-        ret.parts_mut().push(pv);
-        Some(ret)
-    }
 }
 
 #[derive(Debug, Default)]
@@ -268,162 +103,21 @@ impl ISBN2wiki {
     }
 
     // Return ISBN13, fallback to ISBN10 if ISBN13 is not available
-    fn isbn(&self) -> Option<String> {
+    pub fn isbn(&self) -> Option<String> {
         match self.isbn13 {
-            Some(isbn) => Some(isbn.hyphenate().unwrap().to_string()),
+            Some(isbn) => Some(isbn.hyphenate().ok()?.to_string()),
             None => self
                 .isbn10
-                .map(|isbn| isbn.hyphenate().unwrap().to_string()),
+                .and_then(|isbn| isbn.hyphenate().ok())
+                .map(|s| s.to_string()),
         }
     }
 
     pub async fn retrieve(&mut self) -> Result<()> {
         let f1 = self.load_from_goodreads();
-        let f2 = self.load_from_google_books();
-        let _ = join!(f1, f2);
+        let f2 = GoogleBooksFeed::load_from_google_books(self);
+        futures::try_join!(f1, f2)?;
         Ok(())
-    }
-
-    async fn load_from_google_books(&self) -> Result<()> {
-        let isbn = self
-            .isbn()
-            .ok_or_else(|| anyhow!("No ISBN found"))?
-            .replace('-', "");
-        let url =
-            format!("https://books.google.com/books/feeds/volumes?q=isbn:{isbn}&max-results=25");
-
-        let client = reqwest::Client::builder()
-            .user_agent(
-                "Mozilla/5.0 (Windows; U; Windows NT 5.1; rv:1.7.3) Gecko/20041001 Firefox/0.10.1",
-            )
-            // .timeout(std::time::Duration::from_secs(10))
-            .build()
-            .unwrap();
-        let response = client.get(&url).send().await?;
-        let xml = response.text().await?;
-        self.parse_google_books_xml(&xml)
-    }
-
-    fn parse_google_books_xml(&self, xml: &str) -> Result<()> {
-        let xml = xml
-            .replace("<dc:title", "<dctitle")
-            .replace("</dc:title", "</dctitle"); // To avoid XML namespace problems with serde
-
-        let feed: GoogleBooksFeed = serde_xml_rs::from_str(&xml)?;
-        // println!("{feed:#?}");
-
-        let entry = feed
-            .entry
-            .first()
-            .ok_or_else(|| anyhow!("No entry found in Google books"))?;
-
-        let google_books_id = self.extract_google_book_identifiers(entry)?;
-
-        if let Some(language) = entry.language.first() {
-            self.add_reference(
-                "P1476",
-                DataValue::Monolingual {
-                    label: entry.title.to_owned(),
-                    language: language.to_owned(),
-                },
-                Reference::prop("P675", &google_books_id),
-            );
-        }
-
-        for format in &entry.format {
-            if let Some(captures) = RE_PAGES.captures(format.as_str()) {
-                if let Some(first_group) = captures.get(1) {
-                    if let Ok(number_of_pages) = first_group.as_str().parse::<i64>() {
-                        self.add_reference(
-                            "P1104",
-                            DataValue::Quantity(number_of_pages),
-                            Reference::prop("P675", &google_books_id),
-                        );
-                    }
-                }
-            }
-            if format == "book" {
-                self.add_reference(
-                    "P31",
-                    DataValue::Entity("Q571".to_string()),
-                    Reference::prop("P675", &google_books_id),
-                );
-            }
-        }
-
-        for date in &entry.date {
-            if let Some(captures) = RE_PAGES.captures(date.as_str()) {
-                if let Some(first_group) = captures.get(1) {
-                    let time = format!("+{}-01-01T00:00:00Z", first_group.as_str());
-                    self.add_reference(
-                        "P577",
-                        DataValue::Date {
-                            time,
-                            precision: TimePrecision::Year,
-                        },
-                        Reference::prop("P675", &google_books_id),
-                    );
-                }
-            }
-        }
-
-        for creator in &entry.creator {
-            self.add_reference(
-                "P225",
-                DataValue::String(creator.to_owned()),
-                Reference::prop("P675", &google_books_id),
-            );
-        }
-
-        Ok(())
-    }
-
-    fn extract_google_book_identifiers(
-        &self,
-        entry: &GoogleBooksEntry,
-    ) -> Result<String, anyhow::Error> {
-        let mut google_books_id: Option<String> = None;
-        for identifier in &entry.identifier {
-            if let Some(captures) = RE_GOOGLE_BOOKS_ID.captures(identifier.as_str()) {
-                if let Some(first_group) = captures.get(1) {
-                    google_books_id = Some(first_group.as_str().to_string());
-                }
-            };
-            if let Some(captures) = RE_ISBN_10.captures(identifier.as_str()) {
-                if let Some(first_group) = captures.get(1) {
-                    let isbn = first_group.as_str().to_string();
-                    let isbn = format!(
-                        "{}-{}-{}-{}",
-                        &isbn[0..1],
-                        &isbn[1..4],
-                        &isbn[4..9],
-                        &isbn[9..10]
-                    );
-                    self.add_reference("P957", DataValue::String(isbn), Reference::none());
-                }
-            };
-            if let Some(captures) = RE_ISBN_13.captures(identifier.as_str()) {
-                if let Some(first_group) = captures.get(1) {
-                    let isbn = first_group.as_str().to_string();
-                    let isbn = format!(
-                        "{}-{}-{}-{}-{}",
-                        &isbn[0..3],
-                        &isbn[3..4],
-                        &isbn[4..6],
-                        &isbn[6..12],
-                        &isbn[12..13]
-                    );
-                    self.add_reference("P212", DataValue::String(isbn), Reference::none());
-                }
-            };
-        }
-        let google_books_id = google_books_id.ok_or_else(|| anyhow!("No ID found"))?;
-        self.add_reference(
-            "P675",
-            DataValue::String(google_books_id.clone()),
-            Reference::none(),
-        );
-        Ok(google_books_id)
     }
 
     async fn load_from_goodreads(&self) -> Result<()> {
@@ -529,20 +223,16 @@ impl ISBN2wiki {
         Ok(())
     }
 
-    fn add_reference(
-        &self,
-        property: &str, //&mut HashMap<DataValue, HashSet<Reference>>,
-        value: DataValue,
-        reference: Reference,
-    ) {
-        self.values
-            .lock()
-            .unwrap()
-            .entry(property.to_string())
-            .or_default()
-            .entry(value)
-            .or_default()
-            .insert(reference);
+    pub fn add_reference(&self, property: &str, value: DataValue, reference: Reference) {
+        // TODO handle poisoned mutex, or just ignore? unlikely event, no real fallout
+        if let Ok(mut values) = self.values.lock() {
+            values
+                .entry(property.to_string())
+                .or_default()
+                .entry(value)
+                .or_default()
+                .insert(reference);
+        }
     }
 
     fn add_isbn_values_as_statements(&mut self) -> Option<()> {
@@ -677,19 +367,5 @@ impl ISBN2wiki {
             .filter_map(|c| c.to_digit(10))
             .map(|c| c as u8)
             .collect::<Vec<u8>>()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_google_books_xml() {
-        let isbn2wiki = ISBN2wiki::new("9782267027006").unwrap();
-        let xml = include_str!("../test_files/google_books.xml");
-        isbn2wiki.parse_google_books_xml(xml).unwrap();
-        // println!("{:?}", isbn2wiki.values);
-        // TODO actually compare the parsed values with the expected values
     }
 }
