@@ -14,12 +14,17 @@ pub struct InitialSearch;
 
 impl InitialSearch {
     pub async fn run(query: &str) -> Result<Vec<String>> {
-        let mut results = vec![];
         let query = query.trim();
         let candidate_items = Self::get_candidate_items_from_term_store(query).await?;
-        for chunk in candidate_items.chunks(5000) {
-            results.extend(Self::filter_chunk(chunk).await?);
-        }
+        let futures = candidate_items
+            .chunks(5000)
+            .map(Self::filter_chunk)
+            .collect::<Vec<_>>();
+        let results = futures::future::try_join_all(futures)
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
         Ok(results)
     }
 

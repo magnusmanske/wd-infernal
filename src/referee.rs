@@ -95,23 +95,6 @@ enum UrlType {
     DirectWebsite,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct UrlPatternBlacklist {
-    id: usize,
-    pattern: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Url {
-    id: usize,
-    url: String,
-    server: String,
-    timestamp: i64,
-    status: String,
-    contents: Option<String>,
-    content_format: Option<String>,
-}
-
 #[derive(Debug, Serialize)]
 struct EntityStatement {
     entity: String,
