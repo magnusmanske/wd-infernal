@@ -1,10 +1,7 @@
 use axum::http::StatusCode;
 use mediawiki::{Api, hashmap};
 use std::collections::HashMap;
-use tokio::sync::OnceCell;
 use wikibase::Snak;
-
-static WIKIDATA_API: OnceCell<Api> = OnceCell::const_new();
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Wikidata;
@@ -14,14 +11,10 @@ impl Wikidata {
         Snak::new_item("P887", "Q131287902") // based on heuristic: Wikidata Infernal
     }
 
-    pub async fn get_wikidata_api() -> Result<&'static Api, StatusCode> {
-        WIKIDATA_API
-            .get_or_try_init(|| async {
-                Api::new("https://www.wikidata.org/w/api.php")
-                    .await
-                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-            })
+    pub async fn get_wikidata_api() -> Result<Api, StatusCode> {
+        Api::new("https://www.wikidata.org/w/api.php")
             .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
     }
 
     pub async fn search_items(api: &Api, query: &str) -> Result<Vec<String>, StatusCode> {

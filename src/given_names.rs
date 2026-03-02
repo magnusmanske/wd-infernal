@@ -20,7 +20,7 @@ impl GivenNames {
             .await
             .expect("Wikidata API not available");
         ONCE.get_or_init(|| async move {
-            GivenNames::new(api)
+            GivenNames::new(&api)
                 .await
                 .expect("Failed to fetch given names")
         })
