@@ -407,8 +407,7 @@ impl Referee {
         ret
     }
 
-    async fn get_candidate_urls_from_wikis(&self, base_item: &Entity) -> UniqueUrlCandidates {
-        let entity = base_item.id();
+    async fn get_candidate_urls_from_wikis(&self, entity: &str) -> UniqueUrlCandidates {
         if self.entities.load_entity(&self.api, entity).await.is_err() {
             return HashMap::new();
         }
@@ -552,18 +551,18 @@ impl Referee {
 
     async fn get_candidate_urls(&mut self, entity: &str) -> Result<UniqueUrlCandidates> {
         self.entities.load_entity(&self.api, entity).await?;
-        let item = match self.entities.get_entity(entity) {
-            Some(i) => i.clone(),
-            None => return Ok(HashMap::new()),
-        };
+        let has_no_claims = self
+            .entities
+            .get_entity(entity)
+            .map_or(true, |item| item.claims().is_empty());
 
-        if item.claims().is_empty() {
-            return Ok(HashMap::new()); // Has no claims
+        if has_no_claims {
+            return Ok(HashMap::new()); // Entity not found or has no claims
         }
 
-        let f1 = self.get_candidate_urls_from_wikis(&item);
-        let f2 = self.get_direct_websites(&item);
-        let f3 = self.get_candidates_for_external_ids(&item);
+        let f1 = self.get_candidate_urls_from_wikis(entity);
+        let f2 = self.get_direct_websites(entity);
+        let f3 = self.get_candidates_for_external_ids(entity);
         let (from_wikis, official_websites, external_ids) = join!(f1, f2, f3);
 
         let mut ret = from_wikis
@@ -609,7 +608,11 @@ impl Referee {
         }
     }
 
-    async fn get_candidates_for_external_ids(&self, item: &Entity) -> UniqueUrlCandidates {
+    async fn get_candidates_for_external_ids(&self, entity: &str) -> UniqueUrlCandidates {
+        let item = match self.entities.get_entity(entity) {
+            Some(i) => i,
+            None => return HashMap::new(),
+        };
         let mut prop_id = Vec::new();
         let claims = item.claims();
         for claim in claims {
@@ -717,9 +720,13 @@ impl Referee {
             })
             .collect()
     }
-    async fn get_direct_websites(&self, item: &Entity) -> UniqueUrlCandidates {
-        let official_websites = Self::get_string_values_for_property(item, "P856");
-        let described_at_url = Self::get_string_values_for_property(item, "P973");
+    async fn get_direct_websites(&self, entity: &str) -> UniqueUrlCandidates {
+        let item = match self.entities.get_entity(entity) {
+            Some(i) => i,
+            None => return HashMap::new(),
+        };
+        let official_websites = Self::get_string_values_for_property(&item, "P856");
+        let described_at_url = Self::get_string_values_for_property(&item, "P973");
         let mut websites: Vec<_> = official_websites
             .into_iter()
             .chain(described_at_url.into_iter())
