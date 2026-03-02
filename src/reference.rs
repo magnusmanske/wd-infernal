@@ -137,3 +137,220 @@ impl Reference {
         Some(ret)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── DataValue::as_statement_value ─────────────────────────────────────────
+
+    #[test]
+    fn test_as_statement_value_string() {
+        let sv = DataValue::String("hello".to_string()).as_statement_value();
+        assert!(
+            matches!(
+                sv,
+                StatementValue::Value(StatementValueContent::String(s)) if s == "hello"
+            ),
+            "String variant should produce a String StatementValue"
+        );
+    }
+
+    #[test]
+    fn test_as_statement_value_entity_is_string() {
+        // Entity is intentionally serialised as a plain String value
+        let sv = DataValue::Entity("Q42".to_string()).as_statement_value();
+        assert!(
+            matches!(
+                sv,
+                StatementValue::Value(StatementValueContent::String(s)) if s == "Q42"
+            ),
+            "Entity variant should produce a String StatementValue containing the QID"
+        );
+    }
+
+    #[test]
+    fn test_as_statement_value_monolingual() {
+        let sv = DataValue::Monolingual {
+            label: "Hello".to_string(),
+            language: "en".to_string(),
+        }
+        .as_statement_value();
+        assert!(
+            matches!(
+                sv,
+                StatementValue::Value(StatementValueContent::MonolingualText { language, text })
+                    if language == "en" && text == "Hello"
+            ),
+            "Monolingual variant should produce a MonolingualText StatementValue"
+        );
+    }
+
+    #[test]
+    fn test_as_statement_value_quantity() {
+        let sv = DataValue::Quantity(42).as_statement_value();
+        assert!(
+            matches!(
+                sv,
+                StatementValue::Value(StatementValueContent::Quantity { amount, unit })
+                    if amount == "42" && unit.is_empty()
+            ),
+            "Quantity variant should produce a Quantity StatementValue"
+        );
+    }
+
+    #[test]
+    fn test_as_statement_value_date() {
+        let sv = DataValue::Date {
+            time: "+2000-01-01T00:00:00Z".to_string(),
+            precision: TimePrecision::Year,
+        }
+        .as_statement_value();
+        assert!(
+            matches!(
+                sv,
+                StatementValue::Value(StatementValueContent::Time { time, precision, .. })
+                    if time == "+2000-01-01T00:00:00Z"
+                    && precision == TimePrecision::Year
+            ),
+            "Date variant should produce a Time StatementValue with the correct time and precision"
+        );
+    }
+
+    #[test]
+    fn test_as_statement_value_date_calendarmodel() {
+        let sv = DataValue::Date {
+            time: "+2000-01-01T00:00:00Z".to_string(),
+            precision: TimePrecision::Day,
+        }
+        .as_statement_value();
+        if let StatementValue::Value(StatementValueContent::Time { calendarmodel, .. }) = sv {
+            assert_eq!(
+                calendarmodel, GREGORIAN_CALENDAR,
+                "Date should always use the Gregorian calendar model"
+            );
+        } else {
+            panic!("expected a Time StatementValue");
+        }
+    }
+
+    // ── Reference constructors ────────────────────────────────────────────────
+
+    #[test]
+    fn test_reference_none_gives_no_group() {
+        // A none() reference carries no data, so it cannot produce a reference group.
+        assert!(
+            Reference::none().as_ref_group().is_none(),
+            "Reference::none() should produce no reference group"
+        );
+    }
+
+    #[test]
+    fn test_reference_none_is_never_equivalent() {
+        // A none() reference is not equivalent to anything.
+        let group = Reference::prop("P675", "BookID").as_ref_group().unwrap();
+        assert!(
+            !Reference::none().is_equivalent(&group),
+            "Reference::none() should never be equivalent to any reference group"
+        );
+    }
+
+    #[test]
+    fn test_reference_prop_produces_group() {
+        let r = Reference::prop("P675", "BookID");
+        let group = r
+            .as_ref_group()
+            .expect("prop reference should produce a group");
+        // Must contain the stated property …
+        let has_p675 = group.parts().iter().any(|pv| pv.property().id() == "P675");
+        // … and a P813 "retrieved" date.
+        let has_p813 = group.parts().iter().any(|pv| pv.property().id() == "P813");
+        assert!(has_p675, "group should contain the stated property P675");
+        assert!(has_p813, "group should contain P813 (retrieved date)");
+    }
+
+    #[test]
+    fn test_reference_prop_group_has_correct_value() {
+        let r = Reference::prop("P675", "BookID");
+        let group = r.as_ref_group().unwrap();
+        let p675_value = group
+            .parts()
+            .iter()
+            .find(|pv| pv.property().id() == "P675")
+            .and_then(|pv| match pv.value() {
+                StatementValue::Value(StatementValueContent::String(s)) => Some(s.clone()),
+                _ => None,
+            });
+        assert_eq!(
+            p675_value,
+            Some("BookID".to_string()),
+            "P675 part should carry the value 'BookID'"
+        );
+    }
+
+    // ── Reference::is_equivalent ─────────────────────────────────────────────
+
+    #[test]
+    fn test_is_equivalent_round_trip() {
+        // A reference built via prop() must be equivalent to the group it produces.
+        let r = Reference::prop("P8383", "12345");
+        let group = r.as_ref_group().unwrap();
+        assert!(
+            r.is_equivalent(&group),
+            "prop reference must be equivalent to its own as_ref_group output"
+        );
+    }
+
+    #[test]
+    fn test_is_equivalent_wrong_value() {
+        let r = Reference::prop("P675", "BookID");
+        let other_group = Reference::prop("P675", "OtherID").as_ref_group().unwrap();
+        assert!(
+            !r.is_equivalent(&other_group),
+            "reference should not be equivalent when the value differs"
+        );
+    }
+
+    #[test]
+    fn test_is_equivalent_wrong_property() {
+        let r = Reference::prop("P675", "BookID");
+        let other_group = Reference::prop("P957", "BookID").as_ref_group().unwrap();
+        assert!(
+            !r.is_equivalent(&other_group),
+            "reference should not be equivalent when the property differs"
+        );
+    }
+
+    // ── DataValue: Hash + Eq consistency ─────────────────────────────────────
+
+    #[test]
+    fn test_data_value_equality() {
+        assert_eq!(
+            DataValue::String("x".to_string()),
+            DataValue::String("x".to_string())
+        );
+        assert_ne!(
+            DataValue::String("x".to_string()),
+            DataValue::String("y".to_string())
+        );
+        assert_ne!(
+            DataValue::String("x".to_string()),
+            DataValue::Entity("x".to_string()),
+            "String and Entity variants with same payload must be distinct"
+        );
+    }
+
+    #[test]
+    fn test_data_value_quantity_sign() {
+        // Negative quantities must round-trip correctly through as_statement_value
+        let sv = DataValue::Quantity(-7).as_statement_value();
+        assert!(
+            matches!(
+                sv,
+                StatementValue::Value(StatementValueContent::Quantity { amount, .. })
+                    if amount == "-7"
+            ),
+            "Negative quantity must produce '-7' as amount string"
+        );
+    }
+}

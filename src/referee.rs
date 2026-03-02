@@ -1169,4 +1169,283 @@ mod tests {
         );
         assert_eq!("en", Referee::guess_page_language_from_text("12345"));
     }
+
+    #[test]
+    fn test_validate_url_good() {
+        assert!(Referee::validate_url("https://example.com/page").is_ok());
+        assert!(Referee::validate_url("https://en.wikipedia.org/wiki/Foo").is_ok());
+        assert!(Referee::validate_url("https://www.example.org/data").is_ok());
+    }
+
+    #[test]
+    fn test_validate_url_bad() {
+        // Each entry in BAD_URLS must be rejected
+        assert!(Referee::validate_url("https://viaf.org/viaf/12345").is_err());
+        assert!(Referee::validate_url("https://toolforge.org/tool/foo").is_err());
+        assert!(Referee::validate_url("https://wmflabs.org/something").is_err());
+        assert!(Referee::validate_url("https://www.google.com/search?q=foo").is_err());
+        // "://g.co/" pattern
+        assert!(Referee::validate_url("https://g.co/maps/foo").is_err());
+    }
+
+    #[test]
+    fn test_html2text_strips_tags() {
+        // Tags are replaced with spaces
+        assert_eq!(Referee::html2text("<b>bold</b>"), " bold ");
+        // Nested tags: </p> and </div> each become \n, but the multi-newline
+        // collapse pass reduces consecutive newlines to a single \n
+        assert_eq!(Referee::html2text("<div><p>hello</p></div>"), " hello\n");
+    }
+
+    #[test]
+    fn test_html2text_extracts_body() {
+        let html = "<html><head><title>T</title></head><body>Content here</body></html>";
+        assert_eq!(Referee::html2text(html).trim(), "Content here");
+    }
+
+    #[test]
+    fn test_html2text_removes_comments() {
+        assert_eq!(
+            Referee::html2text("before<!-- this is a comment -->after"),
+            "before after"
+        );
+    }
+
+    #[test]
+    fn test_html2text_self_closing_br() {
+        // <br /> must become a newline, not be swallowed
+        let result = Referee::html2text("line1<br />line2");
+        assert!(result.contains('\n'), "expected newline from <br />");
+    }
+
+    #[test]
+    fn test_html2text_collapses_whitespace() {
+        assert_eq!(
+            Referee::html2text("lots   of   spaces\t\there"),
+            "lots of spaces here"
+        );
+    }
+
+    #[test]
+    fn test_is_bad_combination_p373_any_url() {
+        // BAD_PROP_STATEMENT: ("P373", ".") means every URL (all contain ".") is bad for P373
+        let claim = Statement::new_normal(Snak::new_item("P373", "Q1"), vec![], vec![]);
+        let statement = EntityStatement {
+            entity: "Q1".to_string(),
+            property: "P373".to_string(),
+            id: "Q1$test".to_string(),
+            claim,
+        };
+        let uc = UrlCandidate {
+            url: "https://example.com/page".to_string(),
+            url_type: UrlType::DirectWebsite,
+            property: None,
+            external_id: None,
+            stated_in: None,
+            language: "en".to_string(),
+            text: String::new(),
+        };
+        assert!(Referee::is_bad_combination(&statement, &uc));
+    }
+
+    #[test]
+    fn test_is_bad_combination_p27_invaluable() {
+        // BAD_PROP_STATEMENT: ("P27", "www.invaluable.com") is bad
+        let claim = Statement::new_normal(Snak::new_item("P27", "Q30"), vec![], vec![]);
+        let statement = EntityStatement {
+            entity: "Q1".to_string(),
+            property: "P27".to_string(),
+            id: "Q1$test".to_string(),
+            claim,
+        };
+        let uc_bad = UrlCandidate {
+            url: "https://www.invaluable.com/artist/foo-bar".to_string(),
+            url_type: UrlType::DirectWebsite,
+            property: None,
+            external_id: None,
+            stated_in: None,
+            language: "en".to_string(),
+            text: String::new(),
+        };
+        assert!(Referee::is_bad_combination(&statement, &uc_bad));
+    }
+
+    #[test]
+    fn test_is_bad_combination_good() {
+        // P27 + neutral URL: not a bad combination
+        let claim = Statement::new_normal(Snak::new_item("P27", "Q30"), vec![], vec![]);
+        let statement = EntityStatement {
+            entity: "Q1".to_string(),
+            property: "P27".to_string(),
+            id: "Q1$test".to_string(),
+            claim,
+        };
+        let uc = UrlCandidate {
+            url: "https://example.com/page".to_string(),
+            url_type: UrlType::DirectWebsite,
+            property: None,
+            external_id: None,
+            stated_in: None,
+            language: "en".to_string(),
+            text: String::new(),
+        };
+        assert!(!Referee::is_bad_combination(&statement, &uc));
+    }
+
+    #[test]
+    fn test_get_date_patterns_iso_and_generic() {
+        let patterns = Referee::get_date_patterns("en", 2000, 1, 15);
+        // ISO format is always included
+        assert!(patterns.contains(&"2000-01-15".to_string()));
+        // Generic numeric formats
+        assert!(patterns.contains(&"15. 1. 2000".to_string()));
+        assert!(patterns.contains(&"15.1.2000".to_string()));
+        assert!(patterns.contains(&"15/1/2000".to_string()));
+        assert!(patterns.contains(&"15. 01. 2000".to_string()));
+        assert!(patterns.contains(&"15.01.2000".to_string()));
+        assert!(patterns.contains(&"15/01/2000".to_string()));
+    }
+
+    #[test]
+    fn test_get_date_patterns_english_month_names() {
+        let patterns = Referee::get_date_patterns("en", 2000, 1, 15);
+        // Long month name variants
+        assert!(patterns.contains(&"15. January 2000".to_string()));
+        assert!(patterns.contains(&"15 January 2000".to_string()));
+        assert!(patterns.contains(&"January 15, 2000".to_string()));
+        assert!(patterns.contains(&"2000, 15 January".to_string()));
+        // Short month name variants
+        assert!(patterns.contains(&"Jan 15, 2000".to_string()));
+        assert!(patterns.contains(&"Jan. 15, 2000".to_string()));
+        // Lowercase versions must also be present
+        assert!(patterns.contains(&"january 15, 2000".to_string()));
+        assert!(patterns.contains(&"jan 15, 2000".to_string()));
+    }
+
+    #[test]
+    fn test_get_date_patterns_unknown_language() {
+        // An unknown language code still produces the ISO and generic numeric formats
+        let patterns = Referee::get_date_patterns("xx", 1999, 12, 31);
+        assert!(patterns.contains(&"1999-12-31".to_string()));
+        assert!(patterns.contains(&"31. 12. 1999".to_string()));
+        // No locale-specific month name patterns for an unknown language
+        assert!(
+            !patterns
+                .iter()
+                .any(|p| p.contains("December") || p.contains("Dezember"))
+        );
+    }
+
+    #[test]
+    fn test_get_date_patterns_no_duplicate_lowercase() {
+        // Patterns that are already lowercase must not be duplicated
+        let patterns = Referee::get_date_patterns("en", 2000, 1, 15);
+        // ISO format "2000-01-15" is already lowercase; it should appear exactly once
+        assert_eq!(patterns.iter().filter(|p| *p == "2000-01-15").count(), 1);
+    }
+
+    fn make_url_candidate(url: &str) -> UrlCandidate {
+        UrlCandidate {
+            url: url.to_string(),
+            url_type: UrlType::DirectWebsite,
+            property: None,
+            external_id: None,
+            stated_in: None,
+            language: "en".to_string(),
+            text: String::new(),
+        }
+    }
+
+    fn make_text_part(label: &str) -> TextPart {
+        TextPart {
+            before: format!("before_{label}"),
+            regexp_match: label.to_string(),
+            after: format!("after_{label}"),
+        }
+    }
+
+    #[test]
+    fn test_merge_cuc_candidates_empty() {
+        assert!(Referee::merge_cuc_candidates(vec![]).is_empty());
+    }
+
+    #[test]
+    fn test_merge_cuc_candidates_single() {
+        let cuc = ConciseUrlCandidate::new(
+            "Q1$s1",
+            &make_url_candidate("https://a.com"),
+            &make_text_part("t1"),
+        );
+        let result = Referee::merge_cuc_candidates(vec![cuc]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].texts.len(), 1);
+    }
+
+    #[test]
+    fn test_merge_cuc_candidates_merges_equal() {
+        // Two candidates that are "equal" (same statement_id, url, property, external_id, language)
+        // but differ in their TextPart must be merged into one entry with both texts.
+        let uc = make_url_candidate("https://a.com");
+        let cuc1 = ConciseUrlCandidate::new("Q1$s1", &uc, &make_text_part("t1"));
+        let cuc2 = ConciseUrlCandidate::new("Q1$s1", &uc, &make_text_part("t2"));
+        assert_eq!(
+            cuc1, cuc2,
+            "candidates differing only in texts should be equal"
+        );
+        let result = Referee::merge_cuc_candidates(vec![cuc1, cuc2]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].texts.len(), 2);
+    }
+
+    #[test]
+    fn test_merge_cuc_candidates_keeps_different() {
+        // Two candidates with different statement IDs must remain as separate entries.
+        let uc = make_url_candidate("https://a.com");
+        let tp = make_text_part("t");
+        let cuc1 = ConciseUrlCandidate::new("Q1$s1", &uc, &tp);
+        let cuc2 = ConciseUrlCandidate::new("Q1$s2", &uc, &tp);
+        assert_ne!(cuc1, cuc2);
+        let result = Referee::merge_cuc_candidates(vec![cuc1, cuc2]);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_merge_cuc_candidates_deduplicates_texts() {
+        // Identical TextParts must be deduplicated after merging.
+        let uc = make_url_candidate("https://a.com");
+        let tp = make_text_part("same");
+        let cuc1 = ConciseUrlCandidate::new("Q1$s1", &uc, &tp);
+        let cuc2 = ConciseUrlCandidate::new("Q1$s1", &uc, &tp);
+        let result = Referee::merge_cuc_candidates(vec![cuc1, cuc2]);
+        assert_eq!(result.len(), 1);
+        // The two identical TextParts must be deduped to one
+        assert_eq!(result[0].texts.len(), 1);
+    }
+
+    #[test]
+    fn test_concise_url_candidate_ordering() {
+        let uc = make_url_candidate("https://a.com");
+        let tp = make_text_part("t");
+        let cuc_a = ConciseUrlCandidate::new("Q1$aaa", &uc, &tp);
+        let cuc_b = ConciseUrlCandidate::new("Q1$bbb", &uc, &tp);
+        assert!(cuc_a < cuc_b);
+        assert!(cuc_b > cuc_a);
+        assert_eq!(cuc_a.cmp(&cuc_a), std::cmp::Ordering::Equal);
+        // partial_cmp must agree with cmp
+        assert_eq!(cuc_a.partial_cmp(&cuc_b), Some(std::cmp::Ordering::Less));
+    }
+
+    #[test]
+    fn test_concise_url_candidate_eq_ignores_texts_and_stated_in() {
+        // PartialEq ignores the `texts` and `stated_in` fields
+        let uc1 = make_url_candidate("https://a.com");
+        let mut uc2 = make_url_candidate("https://a.com");
+        uc2.stated_in = Some("Q999".to_string());
+        let tp1 = make_text_part("x");
+        let tp2 = make_text_part("y");
+        let cuc1 = ConciseUrlCandidate::new("Q1$s1", &uc1, &tp1);
+        let cuc2 = ConciseUrlCandidate::new("Q1$s1", &uc2, &tp2);
+        // Different texts and stated_in, but same key fields → equal
+        assert_eq!(cuc1, cuc2);
+    }
 }

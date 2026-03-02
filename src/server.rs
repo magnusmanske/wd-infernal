@@ -218,3 +218,139 @@ impl Server {
         Ok(Json(statements))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── items2table ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_items2table_empty_slice() {
+        let html = Server::items2table(&[]);
+        // Must still produce a valid table shell
+        assert!(html.contains("<table"), "should contain opening table tag");
+        assert!(html.contains("<tbody></tbody>"), "tbody should be empty");
+    }
+
+    #[test]
+    fn test_items2table_single_item() {
+        let html = Server::items2table(&["Q42".to_string()]);
+        // Row number starts at 1
+        assert!(html.contains("<th>1</th>"), "first row number should be 1");
+        // The item ID appears as the q= attribute value
+        assert!(
+            html.contains("q='Q42'"),
+            "item ID should appear as q= attribute"
+        );
+        // The item ID appears as link text
+        assert!(html.contains(">Q42<"), "item ID should appear as link text");
+        // The item ID appears inside <tt> for the raw ID column
+        assert!(
+            html.contains("<tt>Q42</tt>"),
+            "item ID should appear in <tt>"
+        );
+    }
+
+    #[test]
+    fn test_items2table_multiple_items_numbered_correctly() {
+        let items: Vec<String> = ["Q1", "Q2", "Q3"].iter().map(|s| s.to_string()).collect();
+        let html = Server::items2table(&items);
+        assert!(
+            html.contains("<th>1</th>"),
+            "first row should be numbered 1"
+        );
+        assert!(
+            html.contains("<th>2</th>"),
+            "second row should be numbered 2"
+        );
+        assert!(
+            html.contains("<th>3</th>"),
+            "third row should be numbered 3"
+        );
+        assert!(
+            !html.contains("<th>4</th>"),
+            "should not have a fourth row number"
+        );
+    }
+
+    #[test]
+    fn test_items2table_all_items_present() {
+        let items: Vec<String> = ["Q10", "Q20"].iter().map(|s| s.to_string()).collect();
+        let html = Server::items2table(&items);
+        assert!(html.contains("Q10"), "Q10 should be present");
+        assert!(html.contains("Q20"), "Q20 should be present");
+    }
+
+    #[test]
+    fn test_items2table_table_structure() {
+        let html = Server::items2table(&["Q1".to_string()]);
+        // Must have a striped Bootstrap table class
+        assert!(
+            html.contains("table-striped"),
+            "table should have table-striped class"
+        );
+        // Must have thead with the three column headers
+        assert!(html.contains("<thead>"), "should have thead");
+        assert!(html.contains("Label"), "should have Label header");
+        assert!(html.contains("Item"), "should have Item header");
+        // Must have tbody
+        assert!(html.contains("<tbody>"), "should have tbody");
+    }
+
+    #[test]
+    fn test_items2table_rows_separated_by_newlines() {
+        let items: Vec<String> = ["Q1", "Q2"].iter().map(|s| s.to_string()).collect();
+        let html = Server::items2table(&items);
+        // The two <tr> blocks must be joined by a newline (from .join("\n"))
+        assert!(
+            html.contains("</tr>\n<tr>"),
+            "rows should be separated by newlines"
+        );
+    }
+
+    // ── get_server_address ────────────────────────────────────────────────────
+    // The crate forbids unsafe code, so set_var/remove_var cannot be called in
+    // tests. We therefore test only properties that are independent of the env
+    // var, plus one test that reads (but does not write) the env var to derive
+    // the expected value.
+
+    #[test]
+    fn test_get_server_address_does_not_panic() {
+        // Smoke-test: the function must not panic regardless of the current env var state
+        let _ = Server::get_server_address();
+    }
+
+    #[test]
+    fn test_get_server_address_is_ipv4() {
+        let addr = Server::get_server_address();
+        assert!(addr.is_ipv4(), "server address should always be IPv4");
+    }
+
+    #[test]
+    fn test_get_server_address_binds_all_interfaces() {
+        // The bind address is hardcoded as [0, 0, 0, 0] — independent of any env var
+        let addr = Server::get_server_address();
+        assert_eq!(
+            addr.ip().to_string(),
+            "0.0.0.0",
+            "server should always bind to all interfaces (0.0.0.0)"
+        );
+    }
+
+    #[test]
+    fn test_get_server_address_port_matches_env_or_default() {
+        // Read (but do not write) the env var to derive the expected port, mirroring
+        // the same logic used inside get_server_address().
+        let expected: u16 = std::env::var("WD_INFERNAL_PORT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(8000);
+        let addr = Server::get_server_address();
+        assert_eq!(
+            addr.port(),
+            expected,
+            "port must be WD_INFERNAL_PORT when set and valid, otherwise 8000"
+        );
+    }
+}

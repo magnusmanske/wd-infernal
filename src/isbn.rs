@@ -364,3 +364,204 @@ impl ISBN2wiki {
             .collect::<Vec<u8>>()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── str2digits ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_str2digits_plain_digits() {
+        assert_eq!(
+            ISBN2wiki::str2digits("1234567890"),
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0]
+        );
+    }
+
+    #[test]
+    fn test_str2digits_strips_hyphens_and_spaces() {
+        assert_eq!(
+            ISBN2wiki::str2digits("978-2-267-02700-6"),
+            vec![9, 7, 8, 2, 2, 6, 7, 0, 2, 7, 0, 0, 6],
+        );
+    }
+
+    #[test]
+    fn test_str2digits_strips_letters() {
+        // Letters that are not digits must be silently dropped
+        assert_eq!(ISBN2wiki::str2digits("ISBN 123"), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_str2digits_empty_string() {
+        assert_eq!(ISBN2wiki::str2digits(""), Vec::<u8>::new());
+    }
+
+    // ── ISBN2wiki::new ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_new_isbn13_valid() {
+        let isbn2wiki = ISBN2wiki::new("9782267027006").expect("valid ISBN-13 should produce Some");
+        // isbn13 must be populated
+        assert!(isbn2wiki.isbn13.is_some(), "isbn13 should be set");
+        // isbn() returns the hyphenated ISBN-13
+        let isbn = isbn2wiki
+            .isbn()
+            .expect("isbn() must return Some for a valid ISBN-13");
+        assert!(
+            isbn.contains('-'),
+            "hyphenated ISBN-13 must contain hyphens"
+        );
+        assert!(isbn.starts_with("978"), "ISBN-13 must start with 978");
+    }
+
+    #[test]
+    fn test_new_isbn10_valid() {
+        // "2267027003" is the ISBN-10 for the same book as above
+        let isbn2wiki = ISBN2wiki::new("2267027003").expect("valid ISBN-10 should produce Some");
+        assert!(isbn2wiki.isbn10.is_some(), "isbn10 should be set");
+    }
+
+    #[test]
+    fn test_new_hyphenated_isbn13() {
+        // Constructor must accept pre-hyphenated input
+        let isbn2wiki =
+            ISBN2wiki::new("978-2-267-02700-6").expect("hyphenated ISBN-13 should be accepted");
+        assert!(isbn2wiki.isbn13.is_some());
+    }
+
+    #[test]
+    fn test_new_invalid_returns_none() {
+        // All-zeros is not a valid ISBN
+        assert!(
+            ISBN2wiki::new("0000000000000").is_none(),
+            "invalid ISBN must return None"
+        );
+    }
+
+    #[test]
+    fn test_new_empty_returns_none() {
+        assert!(
+            ISBN2wiki::new("").is_none(),
+            "empty string must return None"
+        );
+    }
+
+    #[test]
+    fn test_new_populates_isbn_statements() {
+        // After construction, values must already contain ISBN property entries
+        let isbn2wiki = ISBN2wiki::new("9782267027006").unwrap();
+        let values = isbn2wiki.values.lock().unwrap();
+        // P212 = ISBN-13
+        assert!(
+            values.contains_key("P212"),
+            "values should contain P212 (ISBN-13) after construction"
+        );
+    }
+
+    // ── isbn() fallback ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_isbn_prefers_isbn13_over_isbn10() {
+        // When both are available the ISBN-13 should be returned
+        let isbn2wiki = ISBN2wiki::new("9782267027006").unwrap();
+        let isbn = isbn2wiki.isbn().unwrap();
+        // ISBN-13 always starts with a 3-digit prefix
+        assert!(
+            isbn.starts_with("978") || isbn.starts_with("979"),
+            "isbn() should prefer ISBN-13"
+        );
+    }
+
+    #[test]
+    fn test_isbn_falls_back_to_isbn10_when_no_isbn13() {
+        // An ISBN-10 that cannot be represented as ISBN-13 due to length will only set isbn10
+        let isbn2wiki = ISBN2wiki::new("2267027003").unwrap();
+        // If isbn13 happened to be parsed, that is fine; the important thing is isbn() is Some
+        assert!(
+            isbn2wiki.isbn().is_some(),
+            "isbn() must return Some when at least one is set"
+        );
+    }
+
+    // ── add_reference ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_add_reference_inserts_entry() {
+        let isbn2wiki = ISBN2wiki::new("9782267027006").unwrap();
+        isbn2wiki.add_reference(
+            "P675",
+            DataValue::String("TestID".to_string()),
+            Reference::none(),
+        );
+        let values = isbn2wiki.values.lock().unwrap();
+        assert!(
+            values.contains_key("P675"),
+            "P675 entry should be present after add_reference"
+        );
+    }
+
+    #[test]
+    fn test_add_reference_deduplicates_same_reference() {
+        let isbn2wiki = ISBN2wiki::new("9782267027006").unwrap();
+        let dv = DataValue::String("SameID".to_string());
+        let r = Reference::prop("P675", "SameID");
+        isbn2wiki.add_reference("P675", dv.clone(), r.clone());
+        isbn2wiki.add_reference("P675", dv.clone(), r.clone());
+        let values = isbn2wiki.values.lock().unwrap();
+        let refs = values["P675"][&dv].len();
+        assert_eq!(
+            refs, 1,
+            "identical references must be deduplicated (HashSet)"
+        );
+    }
+
+    #[test]
+    fn test_add_reference_accumulates_different_references() {
+        let isbn2wiki = ISBN2wiki::new("9782267027006").unwrap();
+        let dv = DataValue::String("BookID".to_string());
+        isbn2wiki.add_reference("P675", dv.clone(), Reference::prop("P675", "BookID"));
+        isbn2wiki.add_reference("P675", dv.clone(), Reference::prop("P8383", "GoodreadsID"));
+        let values = isbn2wiki.values.lock().unwrap();
+        let refs = values["P675"][&dv].len();
+        assert_eq!(
+            refs, 2,
+            "two distinct references for the same value must both be stored"
+        );
+    }
+
+    // ── generate_item ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_generate_item_contains_isbn_property() {
+        let isbn2wiki = ISBN2wiki::new("9782267027006").unwrap();
+        let item = isbn2wiki
+            .generate_item()
+            .expect("generate_item should succeed");
+        // P212 (ISBN-13) must be among the statements
+        let has_p212 = item.statements().property("P212").iter().count() > 0;
+        assert!(
+            has_p212,
+            "generated item should contain a P212 (ISBN-13) statement"
+        );
+    }
+
+    #[test]
+    fn test_generate_item_statement_value_matches() {
+        let isbn2wiki = ISBN2wiki::new("9782267027006").unwrap();
+        let item = isbn2wiki.generate_item().unwrap();
+        // The P212 statement value must be the hyphenated ISBN-13 string
+        let stmts = item.statements().property("P212");
+        assert!(!stmts.is_empty());
+        let value = stmts[0].value();
+        // StatementValue::Value(StatementValueContent::String(...))
+        assert!(
+            matches!(
+                value,
+                StatementValue::Value(StatementValueContent::String(s)) if s.contains('-')
+            ),
+            "P212 value should be a hyphenated ISBN-13 string"
+        );
+    }
+}

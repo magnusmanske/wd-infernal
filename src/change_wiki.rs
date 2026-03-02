@@ -139,4 +139,106 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result.get("Magnus Manske").unwrap(), "Q13520818");
     }
+
+    // ── normalize_wiki ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_normalize_wiki_already_lowercase() {
+        assert_eq!(ChangeWiki::normalize_wiki("enwiki"), "enwiki");
+    }
+
+    #[test]
+    fn test_normalize_wiki_uppercase_is_lowered() {
+        assert_eq!(ChangeWiki::normalize_wiki("EnWiki"), "enwiki");
+    }
+
+    #[test]
+    fn test_normalize_wiki_all_caps() {
+        assert_eq!(ChangeWiki::normalize_wiki("DEWIKI"), "dewiki");
+    }
+
+    #[test]
+    fn test_normalize_wiki_trims_surrounding_whitespace() {
+        assert_eq!(ChangeWiki::normalize_wiki("  enwiki  "), "enwiki");
+    }
+
+    #[test]
+    fn test_normalize_wiki_strips_digits() {
+        // Digits are not in [a-z] or '_', so they are filtered out
+        assert_eq!(ChangeWiki::normalize_wiki("wiki123"), "wiki");
+    }
+
+    #[test]
+    fn test_normalize_wiki_strips_hyphens_and_dots() {
+        assert_eq!(ChangeWiki::normalize_wiki("en-wiki.org"), "enwikiorg");
+    }
+
+    #[test]
+    fn test_normalize_wiki_preserves_underscores() {
+        assert_eq!(ChangeWiki::normalize_wiki("wikidata_wiki"), "wikidata_wiki");
+    }
+
+    #[test]
+    fn test_normalize_wiki_empty_string() {
+        assert_eq!(ChangeWiki::normalize_wiki(""), "");
+    }
+
+    #[test]
+    fn test_normalize_wiki_only_special_chars_returns_empty() {
+        assert_eq!(ChangeWiki::normalize_wiki("123!@#$%"), "");
+    }
+
+    #[test]
+    fn test_normalize_wiki_mixed_case_with_extras() {
+        // Uppercase letters, digits, and punctuation are all stripped/lowered
+        assert_eq!(ChangeWiki::normalize_wiki("  En_Wiki2! "), "en_wiki");
+    }
+
+    // ── convert: same-wiki short-circuit (no DB required) ────────────────────
+
+    #[tokio::test]
+    async fn test_convert_same_wiki_returns_identity_map() {
+        // When from and to normalise to the same wiki, each title maps to itself
+        let titles = vec![
+            "Douglas Adams".to_string(),
+            "The Hitchhiker's Guide".to_string(),
+        ];
+        let cw = ChangeWiki::new("enwiki", titles.clone());
+        let result = cw.convert("enwiki").await.unwrap();
+        assert_eq!(result.len(), titles.len());
+        for title in &titles {
+            assert_eq!(
+                result.get(title).unwrap(),
+                title,
+                "same-wiki convert should map each title to itself"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_convert_same_wiki_after_normalization() {
+        // "EnWiki" and "enwiki" normalise to the same string, so no DB is hit
+        let titles = vec!["Some Page".to_string()];
+        let cw = ChangeWiki::new("enwiki", titles.clone());
+        let result = cw.convert("EnWiki").await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.get("Some Page").unwrap(), "Some Page");
+    }
+
+    #[tokio::test]
+    async fn test_convert_same_wiki_empty_titles() {
+        let cw = ChangeWiki::new("enwiki", vec![]);
+        let result = cw.convert("enwiki").await.unwrap();
+        assert!(
+            result.is_empty(),
+            "identity map of zero titles must be empty"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_convert_same_wiki_single_title() {
+        let cw = ChangeWiki::new("frwiki", vec!["Paris".to_string()]);
+        let result = cw.convert("frwiki").await.unwrap();
+        assert_eq!(result.get("Paris").unwrap(), "Paris");
+    }
 }
