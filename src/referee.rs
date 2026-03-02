@@ -27,6 +27,26 @@ struct MonthsJsonRow {
 
 lazy_static! {
     static ref RE_WIKI: Regex = Regex::new(r"\b(wikipedia|wikimedia|wik[a-z-]+)\.org/").unwrap();
+
+    // html2text regexes
+    static ref RE_HTML_COMMENT: Regex = Regex::new(r"<!--.*?-->").unwrap();
+    static ref RE_HTML_CLOSING_BLOCK: Regex = Regex::new(r"</(p|div|br)>").unwrap();
+    static ref RE_HTML_BR_SELF_CLOSE: Regex = Regex::new(r"<br\s*/>").unwrap();
+    static ref RE_HTML_TAG: Regex = Regex::new(r"<.+?>").unwrap();
+    static ref RE_WHITESPACE: Regex = Regex::new(r"[\r\t ]+").unwrap();
+    static ref RE_NEWLINES: Regex = Regex::new(r"\n+").unwrap();
+    static ref RE_SPACES: Regex = Regex::new(r" +").unwrap();
+
+    // Language detection regexes
+    static ref RE_LANG_EN: Regex = Regex::new(r"\b(he|she|it|is|from|to|was|the|a|an|born|died)\b").unwrap();
+    static ref RE_LANG_DE: Regex = Regex::new(r"\b(er|sie|sind|ist|es|das|ein|eine|war|geboren|gestorben)\b").unwrap();
+    static ref RE_LANG_IT: Regex = Regex::new(r"\b(è|una|della|la|nel|si|su|una|di)\b").unwrap();
+    static ref RE_LANG_FR: Regex = Regex::new(r"\b(est|un|une|et|le|les|la|il|a|de|par)\b").unwrap();
+    static ref RE_LANG_ES: Regex = Regex::new(r"\b(el|es|un|de|a|la|es|conlas|dos)\b").unwrap();
+
+    // Time value parsing regex
+    static ref RE_TIME_VALUE: Regex = Regex::new(r"^[+-]{0,1}0*(\d+)-(\d\d)-(\d\d)").unwrap();
+
     static ref MONTHS: HashMap<u32,HashMap<String, (String, Option<String>)>> = {
         /*
         # To regenerate the data, run this query in the Wikidata Query Service,
@@ -307,35 +327,28 @@ impl Referee {
         }
 
         // Remove HTML comments
-        let comment_regex = Regex::new(r"<!--.*?-->").unwrap();
-        ret = comment_regex.replace_all(&ret, " ").to_string();
+        ret = RE_HTML_COMMENT.replace_all(&ret, " ").to_string();
 
         // Replace closing tags with newlines
-        let p_div_br_regex = Regex::new(r"</(p|div|br)>").unwrap();
-        ret = p_div_br_regex.replace_all(&ret, "\n").to_string();
+        ret = RE_HTML_CLOSING_BLOCK.replace_all(&ret, "\n").to_string();
 
         // Replace self-closing <br> with newlines
-        let br_regex = Regex::new(r"<br\s*/>").unwrap();
-        ret = br_regex.replace_all(&ret, "\n").to_string();
+        ret = RE_HTML_BR_SELF_CLOSE.replace_all(&ret, "\n").to_string();
 
         // Remove all tags
-        let tag_regex = Regex::new(r"<.+?>").unwrap();
-        ret = tag_regex.replace_all(&ret, " ").to_string();
+        ret = RE_HTML_TAG.replace_all(&ret, " ").to_string();
 
         // Normalize whitespace
-        let whitespace_regex = Regex::new(r"[\r\t ]+").unwrap();
-        ret = whitespace_regex.replace_all(&ret, " ").to_string();
+        ret = RE_WHITESPACE.replace_all(&ret, " ").to_string();
 
         // Clean up space + newline combinations
         ret = ret.replace(" \n", "\n").replace("\n ", "\n");
 
         // Collapse multiple newlines
-        let newlines_regex = Regex::new(r"\n+").unwrap();
-        ret = newlines_regex.replace_all(&ret, "\n").to_string();
+        ret = RE_NEWLINES.replace_all(&ret, "\n").to_string();
 
         // Collapse multiple spaces
-        let spaces_regex = Regex::new(r" +").unwrap();
-        ret = spaces_regex.replace_all(&ret, " ").to_string();
+        ret = RE_SPACES.replace_all(&ret, " ").to_string();
 
         ret
     }
@@ -372,21 +385,11 @@ impl Referee {
         let mut candidates = HashMap::new();
 
         // Count occurrences of common words in different languages
-        let en_regex = Regex::new(r"\b(he|she|it|is|from|to|was|the|a|an|born|died)\b").unwrap();
-        candidates.insert("en", en_regex.find_iter(text).count());
-
-        let de_regex =
-            Regex::new(r"\b(er|sie|sind|ist|es|das|ein|eine|war|geboren|gestorben)\b").unwrap();
-        candidates.insert("de", de_regex.find_iter(text).count());
-
-        let it_regex = Regex::new(r"\b(è|una|della|la|nel|si|su|una|di)\b").unwrap();
-        candidates.insert("it", it_regex.find_iter(text).count());
-
-        let fr_regex = Regex::new(r"\b(est|un|une|et|le|les|la|il|a|de|par)\b").unwrap();
-        candidates.insert("fr", fr_regex.find_iter(text).count());
-
-        let es_regex = Regex::new(r"\b(el|es|un|de|a|la|es|conlas|dos)\b").unwrap();
-        candidates.insert("es", es_regex.find_iter(text).count());
+        candidates.insert("en", RE_LANG_EN.find_iter(text).count());
+        candidates.insert("de", RE_LANG_DE.find_iter(text).count());
+        candidates.insert("it", RE_LANG_IT.find_iter(text).count());
+        candidates.insert("fr", RE_LANG_FR.find_iter(text).count());
+        candidates.insert("es", RE_LANG_ES.find_iter(text).count());
 
         // let it_regex = Regex::new(r"\b(io|tu|lei|lui|chi|che|sono||erano)\b").unwrap();
         // candidates.insert("it", it_regex.find_iter(text).count());
@@ -782,8 +785,7 @@ impl Referee {
                 };
                 let time_str = time_value.time();
 
-                let re = Regex::new(r"^[+-]{0,1}0*(\d+)-(\d\d)-(\d\d)").unwrap();
-                if let Some(caps) = re.captures(time_str) {
+                if let Some(caps) = RE_TIME_VALUE.captures(time_str) {
                     let year = caps.get(1).map_or("", |m| m.as_str());
                     let month = caps.get(2).map_or("", |m| m.as_str()).to_string();
                     let day = caps.get(3).map_or("", |m| m.as_str()).to_string();
