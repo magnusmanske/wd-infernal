@@ -139,9 +139,9 @@ impl Server {
     ) -> Result<impl IntoResponse, StatusCode> {
         let full_titles: Vec<String> = payload
             .as_array()
-            .ok_or(StatusCode::NOT_FOUND)?
+            .ok_or(StatusCode::BAD_REQUEST)?
             .iter()
-            .map(|v| v.as_str().unwrap().to_string())
+            .filter_map(|v| v.as_str().map(str::to_string))
             .collect();
         let cw = crate::change_wiki::ChangeWiki::new(&from, full_titles);
         let results = cw.convert(&to).await.map_err(|_| StatusCode::NOT_FOUND)?;
