@@ -61,9 +61,17 @@ impl GivenNames {
                     binding["qLabel"]["value"].as_str(),
                 )
             })
-            .filter_map(|(name_opt, q_opt)| match (name_opt, q_opt) {
-                (Some(name), Some(q)) => {
-                    Some((name.to_lowercase(), q.rsplit("/").last()?.parse().ok()?))
+            .filter_map(|(uri_opt, label_opt)| match (uri_opt, label_opt) {
+                (Some(uri), Some(label)) => {
+                    // uri is e.g. "http://www.wikidata.org/entity/Q12345"
+                    // label is the human-readable name string
+                    let qid = uri
+                        .split('/')
+                        .next_back()?
+                        .trim_start_matches('Q')
+                        .parse()
+                        .ok()?;
+                    Some((label.to_lowercase(), qid))
                 }
                 _ => None,
             })
@@ -79,9 +87,17 @@ impl GivenNames {
                     binding["qLabel"]["value"].as_str(),
                 )
             })
-            .filter_map(|(name_opt, q_opt)| match (name_opt, q_opt) {
-                (Some(name), Some(q)) => {
-                    Some((name.to_lowercase(), q.rsplit("/").last()?.parse().ok()?))
+            .filter_map(|(uri_opt, label_opt)| match (uri_opt, label_opt) {
+                (Some(uri), Some(label)) => {
+                    // uri is e.g. "http://www.wikidata.org/entity/Q12345"
+                    // label is the human-readable name string
+                    let qid = uri
+                        .split('/')
+                        .next_back()?
+                        .trim_start_matches('Q')
+                        .parse()
+                        .ok()?;
+                    Some((label.to_lowercase(), qid))
                 }
                 _ => None,
             })
