@@ -39,9 +39,9 @@
     clippy::wildcard_imports
 )]
 
-use lazy_static::lazy_static;
 use serde_json::json;
 use std::fs::File;
+use std::sync::LazyLock;
 use wikibase_rest_api::Patch as _;
 use wikimisc::toolforge_db::ToolforgeDB;
 
@@ -59,24 +59,24 @@ pub mod server;
 pub mod viaf;
 pub mod wikidata;
 
-lazy_static! {
-    pub static ref TOOLFORGE_DB: ToolforgeDB = {
-        /* For local testing:
-        ssh magnus@login.toolforge.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
-        ssh magnus@login.toolforge.org -L 3317:termstore.wikidatawiki.analytics.db.svc.wikimedia.cloud:3306 -N &
-         */
+pub static TOOLFORGE_DB: LazyLock<ToolforgeDB> = LazyLock::new(|| {
+    /* For local testing:
+    ssh magnus@login.toolforge.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
+    ssh magnus@login.toolforge.org -L 3317:termstore.wikidatawiki.analytics.db.svc.wikimedia.cloud:3306 -N &
+     */
 
-        let mut ret = ToolforgeDB::default();
-        let file = File::open("config.json").or_else(|_| File::open("/data/project/wd-infernal/wd-infernal/config.json"));
-        if let Ok(file) = file {
-            let reader = std::io::BufReader::new(file);
-            let config: serde_json::Value = serde_json::from_reader(reader).unwrap();
-            ret.add_mysql_pool("wikidata",&config["wikidata"]).unwrap();
-            ret.add_mysql_pool("termstore",&config["termstore"]).unwrap();
-        }
-        ret
-    };
-}
+    let mut ret = ToolforgeDB::default();
+    let file = File::open("config.json")
+        .or_else(|_| File::open("/data/project/wd-infernal/wd-infernal/config.json"));
+    if let Ok(file) = file {
+        let reader = std::io::BufReader::new(file);
+        let config: serde_json::Value = serde_json::from_reader(reader).unwrap();
+        ret.add_mysql_pool("wikidata", &config["wikidata"]).unwrap();
+        ret.add_mysql_pool("termstore", &config["termstore"])
+            .unwrap();
+    }
+    ret
+});
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

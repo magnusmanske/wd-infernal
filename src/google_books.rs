@@ -1,25 +1,27 @@
 use crate::isbn::ISBN2wiki;
 use crate::reference::{DataValue, Reference};
 use anyhow::{Result, anyhow};
-use lazy_static::lazy_static;
 use regex::Regex;
 use reqwest::Client;
 use serde::Deserialize;
+use std::sync::LazyLock;
 use wikibase_rest_api::prelude::*;
 
-lazy_static! {
-    static ref RE_GOOGLE_BOOKS_ID: Regex = Regex::new(r"^([a-zA-Z0-9]+)$").unwrap();
-    static ref RE_PAGES: Regex = Regex::new(r"^(\d+) pages$").unwrap();
-    static ref RE_YEAR: Regex = Regex::new(r"^(\d{4})$").unwrap();
-    static ref RE_ISBN_10: Regex = Regex::new(r"^ISBN:(\d{9}[0-9X])$").unwrap();
-    static ref RE_ISBN_13: Regex = Regex::new(r"^ISBN:(\d{12}[0-9X])$").unwrap();
-    static ref HTTP_CLIENT: Client = Client::builder()
+static RE_GOOGLE_BOOKS_ID: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^([a-zA-Z0-9]+)$").unwrap());
+static RE_PAGES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\d+) pages$").unwrap());
+static RE_YEAR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\d{4})$").unwrap());
+static RE_ISBN_10: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^ISBN:(\d{9}[0-9X])$").unwrap());
+static RE_ISBN_13: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^ISBN:(\d{12}[0-9X])$").unwrap());
+static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(|| {
+    Client::builder()
         .user_agent(
             "Mozilla/5.0 (Windows; U; Windows NT 5.1; rv:1.7.3) Gecko/20041001 Firefox/0.10.1",
         )
         .build()
-        .expect("Failed to build Google Books HTTP client");
-}
+        .expect("Failed to build Google Books HTTP client")
+});
 
 #[derive(Debug, Deserialize, PartialEq)]
 struct GoogleBooksEntry {

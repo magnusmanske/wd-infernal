@@ -23,7 +23,7 @@ mediawiki = "*"
 futures = "*"
 url = "*"
 async-lazy = "*"
-lazy_static = "*"
+
 regex = "*"
 reqwest = "*"
 chrono = "*"

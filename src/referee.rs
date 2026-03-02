@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow};
 use chrono::prelude::*;
 use futures::future::join_all;
 use futures::join;
-use lazy_static::lazy_static;
+
 use regex::Regex;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -10,6 +10,7 @@ use serde_json::Value;
 use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet},
+    sync::LazyLock,
 };
 use wikibase::{
     DataValueType, Entity, EntityTrait, Snak, SnakDataType, Statement,
@@ -25,29 +26,38 @@ struct MonthsJsonRow {
     short: Option<String>,
 }
 
-lazy_static! {
-    static ref RE_WIKI: Regex = Regex::new(r"\b(wikipedia|wikimedia|wik[a-z-]+)\.org/").unwrap();
+static RE_WIKI: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b(wikipedia|wikimedia|wik[a-z-]+)\.org/").unwrap());
 
-    // html2text regexes
-    static ref RE_HTML_COMMENT: Regex = Regex::new(r"<!--.*?-->").unwrap();
-    static ref RE_HTML_CLOSING_BLOCK: Regex = Regex::new(r"</(p|div|br)>").unwrap();
-    static ref RE_HTML_BR_SELF_CLOSE: Regex = Regex::new(r"<br\s*/>").unwrap();
-    static ref RE_HTML_TAG: Regex = Regex::new(r"<.+?>").unwrap();
-    static ref RE_WHITESPACE: Regex = Regex::new(r"[\r\t ]+").unwrap();
-    static ref RE_NEWLINES: Regex = Regex::new(r"\n+").unwrap();
-    static ref RE_SPACES: Regex = Regex::new(r" +").unwrap();
+// html2text regexes
+static RE_HTML_COMMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<!--.*?-->").unwrap());
+static RE_HTML_CLOSING_BLOCK: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"</(p|div|br)>").unwrap());
+static RE_HTML_BR_SELF_CLOSE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<br\s*/>").unwrap());
+static RE_HTML_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<.+?>").unwrap());
+static RE_WHITESPACE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[\r\t ]+").unwrap());
+static RE_NEWLINES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\n+").unwrap());
+static RE_SPACES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r" +").unwrap());
 
-    // Language detection regexes
-    static ref RE_LANG_EN: Regex = Regex::new(r"\b(he|she|it|is|from|to|was|the|a|an|born|died)\b").unwrap();
-    static ref RE_LANG_DE: Regex = Regex::new(r"\b(er|sie|sind|ist|es|das|ein|eine|war|geboren|gestorben)\b").unwrap();
-    static ref RE_LANG_IT: Regex = Regex::new(r"\b(è|una|della|la|nel|si|su|una|di)\b").unwrap();
-    static ref RE_LANG_FR: Regex = Regex::new(r"\b(est|un|une|et|le|les|la|il|a|de|par)\b").unwrap();
-    static ref RE_LANG_ES: Regex = Regex::new(r"\b(el|es|un|de|a|la|es|conlas|dos)\b").unwrap();
+// Language detection regexes
+static RE_LANG_EN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b(he|she|it|is|from|to|was|the|a|an|born|died)\b").unwrap());
+static RE_LANG_DE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b(er|sie|sind|ist|es|das|ein|eine|war|geboren|gestorben)\b").unwrap()
+});
+static RE_LANG_IT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b(è|una|della|la|nel|si|su|una|di)\b").unwrap());
+static RE_LANG_FR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b(est|un|une|et|le|les|la|il|a|de|par)\b").unwrap());
+static RE_LANG_ES: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b(el|es|un|de|a|la|es|conlas|dos)\b").unwrap());
 
-    // Time value parsing regex
-    static ref RE_TIME_VALUE: Regex = Regex::new(r"^[+-]{0,1}0*(\d+)-(\d\d)-(\d\d)").unwrap();
+// Time value parsing regex
+static RE_TIME_VALUE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[+-]{0,1}0*(\d+)-(\d\d)-(\d\d)").unwrap());
 
-    static ref MONTHS: HashMap<u32,HashMap<String, (String, Option<String>)>> = {
+static MONTHS: LazyLock<HashMap<u32, HashMap<String, (String, Option<String>)>>> =
+    LazyLock::new(|| {
         /*
         # To regenerate the data, run this query in the Wikidata Query Service,
         # download as JSON file (not verbose) and save as static/months.json
@@ -64,17 +74,17 @@ lazy_static! {
         let mut ret = HashMap::new();
         for row in data {
             if let Ok(month_num) = row.num.parse::<u32>() {
-                let value = (row.llabel,row.short);
-                ret.entry(month_num).or_insert(HashMap::new()).insert(row.language, value);
-            };
+                let value = (row.llabel, row.short);
+                ret.entry(month_num)
+                    .or_insert_with(HashMap::new)
+                    .insert(row.language, value);
+            }
         }
         ret
-    };
-    // static ref LANGUAGE_DETECTOR: lingua::LanguageDetector = {
-    //     lingua::LanguageDetectorBuilder::from_all_languages().build()
-    // };
-
-}
+    });
+// static LANGUAGE_DETECTOR: LazyLock<lingua::LanguageDetector> = LazyLock::new(|| {
+//     lingua::LanguageDetectorBuilder::from_all_languages().build()
+// });
 
 // Do not generate references for these item types
 const UNSUPPORTED_ENTITY_MARKERS: &[(&str, &str)] = &[

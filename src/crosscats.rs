@@ -1,9 +1,11 @@
 use async_lazy::Lazy;
 use axum::http::StatusCode;
 use futures::future::join_all;
-use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, LazyLock},
+};
 use tools_interface::{PetScan, Tool};
 use url::Url;
 use wikibase::mediawiki::api::Api;
@@ -18,10 +20,8 @@ static SITE_MATRIX: Lazy<SiteMatrix> = Lazy::new(|| {
     })
 });
 
-lazy_static! {
-    static ref REST_API: Arc<RestApi> =
-        Arc::new(RestApi::wikidata().expect("Could not create RestApi"));
-}
+static REST_API: LazyLock<Arc<RestApi>> =
+    LazyLock::new(|| Arc::new(RestApi::wikidata().expect("Could not create RestApi")));
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ItemInfo {

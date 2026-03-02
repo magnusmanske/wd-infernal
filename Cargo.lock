@@ -3824,7 +3824,6 @@ dependencies = [
  "futures",
  "goodreads-metadata-scraper",
  "isbn",
- "lazy_static",
  "mediawiki 0.3.2",
  "regex",
  "reqwest 0.13.1",

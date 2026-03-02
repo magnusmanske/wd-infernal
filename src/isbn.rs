@@ -3,23 +3,18 @@ use crate::reference::{DataValue, Reference};
 use anyhow::{Result, anyhow};
 use grscraper::MetadataRequestBuilder;
 use isbn::{Isbn10, Isbn13};
-use lazy_static::lazy_static;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use wikibase_rest_api::prelude::*;
 use wikibase_rest_api::statements_patch::StatementsPatch;
 
-lazy_static! {
-    static ref RE_GOODREADS_ID: Regex = Regex::new(r"/(\d+)\.jpg$").unwrap();
-    static ref RE_YEAR: Regex = Regex::new(r"^(\d{4})$").unwrap();
-    static ref LANGUAGE_LABELS: HashMap<String, String> = {
-        let json_string = include_str!("../static/languages.json");
-        let data: HashMap<String, String> = serde_json::from_str(json_string).unwrap();
-        data
-    };
-}
+static RE_GOODREADS_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"/(\d+)\.jpg$").unwrap());
+static LANGUAGE_LABELS: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
+    let json_string = include_str!("../static/languages.json");
+    serde_json::from_str(json_string).unwrap()
+});
 
 #[derive(Debug, Default)]
 pub struct ISBN2wiki {
