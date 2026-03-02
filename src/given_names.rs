@@ -19,7 +19,7 @@ impl GivenNames {
         let api = Wikidata::get_wikidata_api()
             .await
             .expect("Wikidata API not available");
-        ONCE.get_or_init(|| async {
+        ONCE.get_or_init(|| async move {
             GivenNames::new(api)
                 .await
                 .expect("Failed to fetch given names")
@@ -39,7 +39,7 @@ impl GivenNames {
         self.male.get(name).or(self.female.get(name)).cloned()
     }
 
-    async fn new(api: Api) -> Result<Self> {
+    async fn new(api: &Api) -> Result<Self> {
         // Load all male and female given names from SPARQL
         let sparql = "SELECT ?q ?qLabel ?gender {
         	VALUES ?gender { wd:Q11879590 wd:Q12308941 } .
