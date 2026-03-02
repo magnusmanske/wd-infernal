@@ -9,6 +9,7 @@ use wikibase_rest_api::prelude::*;
 lazy_static! {
     static ref RE_GOOGLE_BOOKS_ID: Regex = Regex::new(r"^([a-zA-Z0-9]+)$").unwrap();
     static ref RE_PAGES: Regex = Regex::new(r"^(\d+) pages$").unwrap();
+    static ref RE_YEAR: Regex = Regex::new(r"^(\d{4})$").unwrap();
     static ref RE_ISBN_10: Regex = Regex::new(r"^ISBN:(\d{9}[0-9X])$").unwrap();
     static ref RE_ISBN_13: Regex = Regex::new(r"^ISBN:(\d{12}[0-9X])$").unwrap();
 }
@@ -99,7 +100,7 @@ impl GoogleBooksFeed {
         }
 
         for date in &entry.date {
-            if let Some(captures) = RE_PAGES.captures(date.as_str()) {
+            if let Some(captures) = RE_YEAR.captures(date.as_str()) {
                 if let Some(first_group) = captures.get(1) {
                     let time = format!("+{}-01-01T00:00:00Z", first_group.as_str());
                     isbn2wiki.add_reference(
