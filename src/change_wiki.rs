@@ -49,15 +49,19 @@ impl ChangeWiki {
         let mut conn = TOOLFORGE_DB.get_connection("wikidata").await?;
         let mut ret: HashMap<String, String> = HashMap::new();
         for chunk in self.titles.chunks(5000) {
-            let chunk: Vec<String> = chunk.iter().map(|t| t[1..].to_string()).collect();
-            let placeholders: String = std::iter::repeat_n("?", chunk.len())
+            let item_ids: Vec<String> = chunk.iter().map(|t| t[1..].to_string()).collect();
+            let placeholders: String = std::iter::repeat_n("?", item_ids.len())
                 .collect::<Vec<_>>()
                 .join(",");
             let sql = format!(
-                "SELECT concat('Q',ips_item_id),ips_site_page FROM wb_items_per_site WHERE ips_site_id='{wiki_to}' AND ips_item_id IN ({placeholders})"
+                "SELECT concat('Q',ips_item_id),ips_site_page FROM wb_items_per_site WHERE ips_site_id=? AND ips_item_id IN ({placeholders})"
             );
+            // Prepend wiki_to as the first positional parameter
+            let mut params: Vec<String> = Vec::with_capacity(item_ids.len() + 1);
+            params.push(wiki_to.to_string());
+            params.extend(item_ids);
             let results = conn
-                .exec_iter(sql, chunk)
+                .exec_iter(sql, params)
                 .await?
                 .map_and_drop(from_row::<(String, String)>)
                 .await?;
@@ -72,15 +76,19 @@ impl ChangeWiki {
         let mut conn = TOOLFORGE_DB.get_connection("wikidata").await?;
         let mut ret: HashMap<String, String> = HashMap::new();
         for chunk in self.titles.chunks(5000) {
-            let chunk: Vec<String> = chunk.iter().map(|t| t.replace('_', " ")).collect();
-            let placeholders: String = std::iter::repeat_n("?", chunk.len())
+            let titles: Vec<String> = chunk.iter().map(|t| t.replace('_', " ")).collect();
+            let placeholders: String = std::iter::repeat_n("?", titles.len())
                 .collect::<Vec<_>>()
                 .join(",");
             let sql = format!(
-                "SELECT ips_site_page,concat('Q',ips_item_id) FROM wb_items_per_site WHERE ips_site_id='{wiki_from}' AND ips_site_page IN ({placeholders})"
+                "SELECT ips_site_page,concat('Q',ips_item_id) FROM wb_items_per_site WHERE ips_site_id=? AND ips_site_page IN ({placeholders})"
             );
+            // Prepend wiki_from as the first positional parameter
+            let mut params: Vec<String> = Vec::with_capacity(titles.len() + 1);
+            params.push(wiki_from.to_string());
+            params.extend(titles);
             let results = conn
-                .exec_iter(sql, chunk)
+                .exec_iter(sql, params)
                 .await?
                 .map_and_drop(from_row::<(String, String)>)
                 .await?;
@@ -90,13 +98,12 @@ impl ChangeWiki {
         Ok(ret)
     }
 
-    /// Normalize a wiki name to a lowercase string with only digits and underscores.
-    /// Result is safe for database use
+    /// Normalize a wiki name to a safe lowercase string of only ASCII letters and underscores.
     fn normalize_wiki(wiki: &str) -> String {
         wiki.trim()
             .to_ascii_lowercase()
             .chars()
-            .filter(|c| (*c >= 'a' && *c <= 'z') || *c == '_')
+            .filter(|c| c.is_ascii_lowercase() || *c == '_')
             .collect::<String>()
     }
 }
