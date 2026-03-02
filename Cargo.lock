@@ -3826,7 +3826,7 @@ dependencies = [
  "isbn",
  "mediawiki 0.3.2",
  "regex",
- "reqwest 0.13.1",
+ "reqwest 0.12.28",
  "serde",
  "serde-xml-rs",
  "serde_json",
