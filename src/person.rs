@@ -1,4 +1,4 @@
-use crate::{given_names::GivenNames, wikidata::Wikidata};
+use crate::wikidata::Wikidata;
 use axum::http::StatusCode;
 use futures::future::join_all;
 use mediawiki::Api;
@@ -56,12 +56,7 @@ impl Person {
         api: &Api,
         statements: &mut Vec<Statement>,
     ) -> Result<(), StatusCode> {
-        if true {
-            Self::add_first_names_gender_via_search(first_names, api, statements).await
-        } else {
-            // Not in use yet
-            Self::add_first_names_gender_using_given_names(first_names, statements).await
-        }
+        Self::add_first_names_gender_via_search(first_names, api, statements).await
     }
 
     async fn add_first_names_gender_via_search(
@@ -109,37 +104,6 @@ impl Person {
                 .collect();
             statements.extend(name_statements);
         }
-        Ok(())
-    }
-
-    // Not in use now, some error with the SPARQL in GivenNames
-    async fn add_first_names_gender_using_given_names(
-        first_names: Vec<&str>,
-        statements: &mut Vec<Statement>,
-    ) -> Result<(), StatusCode> {
-        let gn = GivenNames::get_static().await;
-        let is_male = first_names.iter().any(|x| gn.is_male(x));
-        let is_female = first_names.iter().any(|x| gn.is_female(x));
-        match (is_male, is_female) {
-            (true, false) => statements.push(Self::gender_statement("Q6581097")), // male
-            (false, true) => statements.push(Self::gender_statement("Q6581072")), // female
-            _ => return Ok(()),
-        }
-
-        // Either male or female, no ambiguity
-        let name_statements: Vec<_> = first_names
-            .iter()
-            .filter_map(|name| gn.name2qid(name))
-            .map(|q| {
-                let snak = Snak::new_item("P735", &format!("Q{q}"));
-                let reference = Reference::new(vec![
-                    Wikidata::infernal_reference_snak(),
-                    Snak::new_item("P3452", "Q97033143"), // inferred from person's full name
-                ]);
-                Statement::new_normal(snak, vec![], vec![reference])
-            })
-            .collect();
-        statements.extend(name_statements);
         Ok(())
     }
 
