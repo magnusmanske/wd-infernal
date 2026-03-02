@@ -3,6 +3,7 @@ use crate::reference::{DataValue, Reference};
 use anyhow::{Result, anyhow};
 use lazy_static::lazy_static;
 use regex::Regex;
+use reqwest::Client;
 use serde::Deserialize;
 use wikibase_rest_api::prelude::*;
 
@@ -12,6 +13,12 @@ lazy_static! {
     static ref RE_YEAR: Regex = Regex::new(r"^(\d{4})$").unwrap();
     static ref RE_ISBN_10: Regex = Regex::new(r"^ISBN:(\d{9}[0-9X])$").unwrap();
     static ref RE_ISBN_13: Regex = Regex::new(r"^ISBN:(\d{12}[0-9X])$").unwrap();
+    static ref HTTP_CLIENT: Client = Client::builder()
+        .user_agent(
+            "Mozilla/5.0 (Windows; U; Windows NT 5.1; rv:1.7.3) Gecko/20041001 Firefox/0.10.1",
+        )
+        .build()
+        .expect("Failed to build Google Books HTTP client");
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -46,13 +53,7 @@ impl GoogleBooksFeed {
         let url =
             format!("https://books.google.com/books/feeds/volumes?q=isbn:{isbn}&max-results=25");
 
-        let client = reqwest::Client::builder()
-            .user_agent(
-                "Mozilla/5.0 (Windows; U; Windows NT 5.1; rv:1.7.3) Gecko/20041001 Firefox/0.10.1",
-            )
-            // .timeout(std::time::Duration::from_secs(10))
-            .build()?;
-        let response = client.get(&url).send().await?;
+        let response = HTTP_CLIENT.get(&url).send().await?;
         let xml = response.text().await?;
         Self::parse_google_books_xml(isbn2wiki, &xml)
     }
