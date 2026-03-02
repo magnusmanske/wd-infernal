@@ -170,9 +170,16 @@ impl Server {
     }
 
     async fn isbn_item(Path(item): Path<String>) -> Result<impl IntoResponse, StatusCode> {
-        let mut isbn2wiki = ISBN2wiki::new_from_item(&item).await.unwrap();
-        isbn2wiki.retrieve().await.unwrap();
-        let patch = isbn2wiki.generate_patch(&item).unwrap();
+        let mut isbn2wiki = ISBN2wiki::new_from_item(&item)
+            .await
+            .ok_or(StatusCode::NOT_FOUND)?;
+        isbn2wiki
+            .retrieve()
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let patch = isbn2wiki
+            .generate_patch(&item)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         let ret = patch.patch().to_owned();
         Ok(Json(ret))
     }
