@@ -115,11 +115,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "crosscats" => {
                 let item = std::env::args().nth(2).unwrap();
                 let depth: u32 = std::env::args()
-                    .nth(2)
+                    .nth(3)
                     .unwrap_or_else(|| "0".to_string())
                     .parse()
                     .unwrap();
-                let language = std::env::args().nth(2).unwrap_or_else(|| "en".to_string());
+                let language = std::env::args().nth(4).unwrap_or_else(|| "en".to_string());
                 let ret = crosscats::CrossCats::cross_cats(&item, depth, &language)
                     .await
                     .unwrap();
