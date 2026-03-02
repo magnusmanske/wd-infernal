@@ -56,32 +56,33 @@ static RE_LANG_ES: LazyLock<Regex> =
 static RE_TIME_VALUE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[+-]{0,1}0*(\d+)-(\d\d)-(\d\d)").unwrap());
 
-static MONTHS: LazyLock<HashMap<u32, HashMap<String, (String, Option<String>)>>> =
-    LazyLock::new(|| {
-        /*
-        # To regenerate the data, run this query in the Wikidata Query Service,
-        # download as JSON file (not verbose) and save as static/months.json
-        SELECT ?num ?language ?llabel ?short {
-            ?month wdt:P31 wd:Q47018901; p:P279 ?statement ;rdfs:label ?label.
-            ?statement ps:P279 wd:Q18602249; pq:P1545 ?num .
-            BIND ( lang(?label) AS ?language ) .
-            BIND ( str(?label) AS ?llabel ) .
-            OPTIONAL { ?month wdt:P1813 ?short_with_language . FILTER ( lang(?short_with_language)=?language ) . BIND ( str(?short_with_language) AS ?short ) }
+type HashStringOptionString = HashMap<String, (String, Option<String>)>;
+
+static MONTHS: LazyLock<HashMap<u32, HashStringOptionString>> = LazyLock::new(|| {
+    /*
+    # To regenerate the data, run this query in the Wikidata Query Service,
+    # download as JSON file (not verbose) and save as static/months.json
+    SELECT ?num ?language ?llabel ?short {
+        ?month wdt:P31 wd:Q47018901; p:P279 ?statement ;rdfs:label ?label.
+        ?statement ps:P279 wd:Q18602249; pq:P1545 ?num .
+        BIND ( lang(?label) AS ?language ) .
+        BIND ( str(?label) AS ?llabel ) .
+        OPTIONAL { ?month wdt:P1813 ?short_with_language . FILTER ( lang(?short_with_language)=?language ) . BIND ( str(?short_with_language) AS ?short ) }
+    }
+    */
+    let json_string = include_str!("../static/months.json");
+    let data: Vec<MonthsJsonRow> = serde_json::from_str(json_string).unwrap();
+    let mut ret = HashMap::new();
+    for row in data {
+        if let Ok(month_num) = row.num.parse::<u32>() {
+            let value = (row.llabel, row.short);
+            ret.entry(month_num)
+                .or_insert_with(HashMap::new)
+                .insert(row.language, value);
         }
-        */
-        let json_string = include_str!("../static/months.json");
-        let data: Vec<MonthsJsonRow> = serde_json::from_str(json_string).unwrap();
-        let mut ret = HashMap::new();
-        for row in data {
-            if let Ok(month_num) = row.num.parse::<u32>() {
-                let value = (row.llabel, row.short);
-                ret.entry(month_num)
-                    .or_insert_with(HashMap::new)
-                    .insert(row.language, value);
-            }
-        }
-        ret
-    });
+    }
+    ret
+});
 // static LANGUAGE_DETECTOR: LazyLock<lingua::LanguageDetector> = LazyLock::new(|| {
 //     lingua::LanguageDetectorBuilder::from_all_languages().build()
 // });
@@ -564,7 +565,7 @@ impl Referee {
         let has_no_claims = self
             .entities
             .get_entity(entity)
-            .map_or(true, |item| item.claims().is_empty());
+            .is_none_or(|item| item.claims().is_empty());
 
         if has_no_claims {
             return Ok(HashMap::new()); // Entity not found or has no claims

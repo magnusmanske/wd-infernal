@@ -540,7 +540,7 @@ mod tests {
             .generate_item()
             .expect("generate_item should succeed");
         // P212 (ISBN-13) must be among the statements
-        let has_p212 = item.statements().property("P212").iter().count() > 0;
+        let has_p212 = !item.statements().property("P212").is_empty();
         assert!(
             has_p212,
             "generated item should contain a P212 (ISBN-13) statement"
