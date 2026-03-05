@@ -1037,6 +1037,9 @@ impl Referee {
             None => return Ok(ret),
         };
 
+        // Cache compiled regexes per language to avoid recompiling for each URL candidate
+        let mut regex_cache: HashMap<String, Vec<Regex>> = HashMap::new();
+
         for url_candidate in url_candidates.values() {
             if Self::does_statement_have_this_reference(statement, url_candidate) {
                 continue;
@@ -1046,29 +1049,39 @@ impl Referee {
                 continue;
             }
 
-            let patterns = self
-                .get_statement_search_patterns(statement, &url_candidate.language)
-                .await?;
-
-            for pattern in patterns {
-                if pattern.trim().is_empty() {
-                    continue;
+            let regexes = match regex_cache.get(&url_candidate.language) {
+                Some(cached) => cached,
+                None => {
+                    let patterns = self
+                        .get_statement_search_patterns(statement, &url_candidate.language)
+                        .await?;
+                    let compiled: Vec<Regex> = patterns
+                        .iter()
+                        .filter(|p| !p.trim().is_empty())
+                        .filter_map(|pattern| {
+                            let re_pattern =
+                                format!(r"\b(.{{0,60}})\b({pattern})\b(.{{0,60}})\b");
+                            Regex::new(&re_pattern).ok()
+                        })
+                        .collect();
+                    regex_cache
+                        .entry(url_candidate.language.clone())
+                        .or_insert(compiled)
                 }
+            };
 
-                let re_pattern = format!(r"\b(.{{0,60}})\b({pattern})\b(.{{0,60}})\b");
-                if let Ok(re) = Regex::new(&re_pattern) {
-                    if let Some(caps) = re.captures(&url_candidate.text) {
-                        let before = caps.get(1).map_or("", |m| m.as_str()).to_string();
-                        let matched = caps.get(2).map_or("", |m| m.as_str()).to_string();
-                        let after = caps.get(3).map_or("", |m| m.as_str()).to_string();
+            for re in regexes {
+                if let Some(caps) = re.captures(&url_candidate.text) {
+                    let before = caps.get(1).map_or("", |m| m.as_str()).to_string();
+                    let matched = caps.get(2).map_or("", |m| m.as_str()).to_string();
+                    let after = caps.get(3).map_or("", |m| m.as_str()).to_string();
 
-                        let tp = TextPart {
-                            before,
-                            regexp_match: matched,
-                            after,
-                        };
-                        ret.push(ConciseUrlCandidate::new(&statement_id, url_candidate, &tp));
-                    }
+                    let tp = TextPart {
+                        before,
+                        regexp_match: matched,
+                        after,
+                    };
+                    ret.push(ConciseUrlCandidate::new(&statement_id, url_candidate, &tp));
                 }
             }
         }
