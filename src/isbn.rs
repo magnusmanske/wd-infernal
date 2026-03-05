@@ -94,7 +94,7 @@ impl ISBN2wiki {
     }
 
     fn vec2array<T, const N: usize>(v: Vec<T>) -> Result<[T; N]> {
-        v.try_into().map_err(|_| anyhow!("Wong length"))
+        v.try_into().map_err(|_| anyhow!("Wrong length"))
     }
 
     // Return ISBN13, fallback to ISBN10 if ISBN13 is not available
