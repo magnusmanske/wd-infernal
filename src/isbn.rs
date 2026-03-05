@@ -5,7 +5,6 @@ use grscraper::MetadataRequestBuilder;
 use isbn::{Isbn10, Isbn13};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
-use std::convert::TryInto;
 use std::sync::{LazyLock, Mutex};
 use wikibase_rest_api::prelude::*;
 use wikibase_rest_api::statements_patch::StatementsPatch;
@@ -26,8 +25,8 @@ pub struct ISBN2wiki {
 impl ISBN2wiki {
     pub fn new(isbn: &str) -> Option<Self> {
         let isbn_digits = Self::str2digits(isbn);
-        let isbn_10: Option<[u8; 10]> = Self::vec2array(isbn_digits.to_owned()).ok();
-        let isbn_13: Option<[u8; 13]> = Self::vec2array(isbn_digits.to_owned()).ok();
+        let isbn_10: Option<[u8; 10]> = Self::vec2array(isbn_digits.clone()).ok();
+        let isbn_13: Option<[u8; 13]> = Self::vec2array(isbn_digits).ok();
         let mut ret = ISBN2wiki {
             isbn10: isbn_10.and_then(|isbn_array| Isbn10::new(isbn_array).ok()),
             isbn13: isbn_13.and_then(|isbn_array| Isbn13::new(isbn_array).ok()),
@@ -58,7 +57,7 @@ impl ISBN2wiki {
             })
             .map(|s| Self::str2digits(s))
             .filter_map(|s| Self::vec2array(s).ok())
-            .filter_map(|s| Isbn10::new(s).ok().to_owned())
+            .filter_map(|s| Isbn10::new(s).ok())
             .next();
         let isbn13 = statements
             .statements()
@@ -75,7 +74,7 @@ impl ISBN2wiki {
             })
             .map(|s| Self::str2digits(s))
             .filter_map(|s| Self::vec2array(s).ok())
-            .filter_map(|s| Isbn13::new(s).ok().to_owned())
+            .filter_map(|s| Isbn13::new(s).ok())
             .next();
 
         if isbn10.is_none() && isbn13.is_none() {
@@ -268,7 +267,7 @@ impl ISBN2wiki {
                 ret.statements_mut()
                     .statements_mut()
                     .entry(property.to_owned())
-                    .or_insert(vec![])
+                    .or_default()
                     .push(statement);
             }
         }
@@ -332,7 +331,7 @@ impl ISBN2wiki {
                         statements_new
                             .statements_mut()
                             .entry(property.to_owned())
-                            .or_insert(vec![])
+                            .or_default()
                             .push(statement);
                     }
                 }
