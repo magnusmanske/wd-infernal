@@ -563,4 +563,56 @@ mod tests {
             "P212 value should be a hyphenated ISBN-13 string"
         );
     }
+
+    // ── vec2array ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_vec2array_correct_length() {
+        let v = vec![1u8, 2, 3];
+        let result: Result<[u8; 3]> = ISBN2wiki::vec2array(v);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), [1, 2, 3]);
+    }
+
+    #[test]
+    fn test_vec2array_wrong_length() {
+        let v = vec![1u8, 2];
+        let result: Result<[u8; 3]> = ISBN2wiki::vec2array(v);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_vec2array_empty() {
+        let v: Vec<u8> = vec![];
+        let result: Result<[u8; 0]> = ISBN2wiki::vec2array(v);
+        assert!(result.is_ok());
+    }
+
+    // ── generate_patch ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_generate_patch_produces_valid_patch() {
+        let isbn2wiki = ISBN2wiki::new("9782267027006").unwrap();
+        let patch = isbn2wiki.generate_patch("Q1234");
+        assert!(patch.is_ok(), "generate_patch should succeed for valid item ID");
+    }
+
+    #[test]
+    fn test_generate_patch_invalid_entity_id() {
+        let isbn2wiki = ISBN2wiki::new("9782267027006").unwrap();
+        let patch = isbn2wiki.generate_patch("not-a-valid-id");
+        assert!(patch.is_err(), "generate_patch should fail for invalid entity ID");
+    }
+
+    // ── isbn fallback for None ───────────────────────────────────────────────
+
+    #[test]
+    fn test_isbn_returns_none_when_both_missing() {
+        let isbn2wiki = ISBN2wiki {
+            isbn10: None,
+            isbn13: None,
+            ..Default::default()
+        };
+        assert!(isbn2wiki.isbn().is_none());
+    }
 }

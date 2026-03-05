@@ -1497,4 +1497,78 @@ mod tests {
         // Different texts and stated_in, but same key fields → equal
         assert_eq!(cuc1, cuc2);
     }
+
+    #[test]
+    fn test_html2text_empty_input() {
+        assert_eq!(Referee::html2text(""), "");
+    }
+
+    #[test]
+    fn test_html2text_plain_text_passthrough() {
+        assert_eq!(Referee::html2text("just plain text"), "just plain text");
+    }
+
+    #[test]
+    fn test_html2text_body_extraction_ignores_head() {
+        let html = "<html><head><style>body{color:red}</style></head><body>Only this</body></html>";
+        assert_eq!(Referee::html2text(html).trim(), "Only this");
+    }
+
+    #[test]
+    fn test_html2text_no_body_tag_returns_full_content() {
+        let html = "<div>No body tag here</div>";
+        let result = Referee::html2text(html);
+        assert!(result.contains("No body tag here"));
+    }
+
+    #[test]
+    fn test_validate_url_empty_string_is_ok() {
+        assert!(Referee::validate_url("").is_ok());
+    }
+
+    #[test]
+    fn test_guess_page_language_empty_text() {
+        // Empty text should default to "en"
+        assert_eq!(Referee::guess_page_language_from_text(""), "en");
+    }
+
+    #[test]
+    fn test_guess_page_language_spanish() {
+        assert_eq!(
+            Referee::guess_page_language_from_text("el es un de a la es dos conlas"),
+            "es"
+        );
+    }
+
+    #[test]
+    fn test_guess_page_language_italian() {
+        assert_eq!(
+            Referee::guess_page_language_from_text("è una della la nel si su"),
+            "it"
+        );
+    }
+
+    #[test]
+    fn test_months_all_12_present() {
+        for month in 1..=12 {
+            assert!(
+                MONTHS.contains_key(&month),
+                "Month {month} should be present in MONTHS"
+            );
+        }
+    }
+
+    #[test]
+    fn test_does_statement_have_this_reference_no_refs() {
+        // A statement with no references should return false
+        let claim = Statement::new_normal(Snak::new_item("P27", "Q30"), vec![], vec![]);
+        let statement = EntityStatement {
+            entity: "Q1".to_string(),
+            property: "P27".to_string(),
+            id: "Q1$test".to_string(),
+            claim,
+        };
+        let uc = make_url_candidate("https://example.com");
+        assert!(!Referee::does_statement_have_this_reference(&statement, &uc));
+    }
 }

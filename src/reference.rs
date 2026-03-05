@@ -353,4 +353,36 @@ mod tests {
             "Negative quantity must produce '-7' as amount string"
         );
     }
+
+    #[test]
+    fn test_reference_url_produces_group_with_p854() {
+        let r = Reference::_url("https://example.com/page");
+        let group = r
+            .as_ref_group()
+            .expect("URL reference should produce a group");
+        let has_p854 = group.parts().iter().any(|pv| pv.property().id() == "P854");
+        assert!(has_p854, "URL reference group should contain P854");
+        let has_p813 = group.parts().iter().any(|pv| pv.property().id() == "P813");
+        assert!(has_p813, "URL reference group should contain P813 (retrieved date)");
+    }
+
+    #[test]
+    fn test_reference_url_is_equivalent_to_own_group() {
+        let r = Reference::_url("https://example.com/page");
+        let group = r.as_ref_group().unwrap();
+        assert!(r.is_equivalent(&group));
+    }
+
+    #[test]
+    fn test_reference_url_not_equivalent_to_different_url() {
+        let r = Reference::_url("https://example.com/page");
+        let other_group = Reference::_url("https://other.com/page").as_ref_group().unwrap();
+        assert!(!r.is_equivalent(&other_group));
+    }
+
+    #[test]
+    fn test_reference_default_is_none() {
+        let r = Reference::default();
+        assert!(r.as_ref_group().is_none());
+    }
 }
