@@ -42,40 +42,12 @@ impl ISBN2wiki {
         let entity_id = EntityId::new(item_id).ok()?;
         let api = RestApi::wikidata().ok()?;
         let statements = Statements::get(&entity_id, &api).await.ok()?;
-        let isbn10 = statements
-            .statements()
-            .iter()
-            .filter(|(prop, _s)| *prop == "P957")
-            .filter_map(|(_prop, s)| s.first())
-            .filter_map(|s| match s.value() {
-                StatementValue::Value(svc) => Some(svc),
-                _ => None,
-            })
-            .filter_map(|svc| match svc {
-                StatementValueContent::String(s) => Some(s),
-                _ => None,
-            })
-            .map(|s| Self::str2digits(s))
-            .filter_map(|s| Self::vec2array(s).ok())
-            .filter_map(|s| Isbn10::new(s).ok())
-            .next();
-        let isbn13 = statements
-            .statements()
-            .iter()
-            .filter(|(prop, _s)| *prop == "P212")
-            .filter_map(|(_prop, s)| s.first())
-            .filter_map(|s| match s.value() {
-                StatementValue::Value(svc) => Some(svc),
-                _ => None,
-            })
-            .filter_map(|svc| match svc {
-                StatementValueContent::String(s) => Some(s),
-                _ => None,
-            })
-            .map(|s| Self::str2digits(s))
-            .filter_map(|s| Self::vec2array(s).ok())
-            .filter_map(|s| Isbn13::new(s).ok())
-            .next();
+        let isbn10 = Self::extract_isbn_string(&statements, "P957")
+            .and_then(|digits| Self::vec2array(digits).ok())
+            .and_then(|arr| Isbn10::new(arr).ok());
+        let isbn13 = Self::extract_isbn_string(&statements, "P212")
+            .and_then(|digits| Self::vec2array(digits).ok())
+            .and_then(|arr| Isbn13::new(arr).ok());
 
         if isbn10.is_none() && isbn13.is_none() {
             return None;
@@ -90,6 +62,20 @@ impl ISBN2wiki {
         ret.add_isbn_values_as_statements()?;
 
         Some(ret)
+    }
+
+    fn extract_isbn_string(statements: &Statements, property: &str) -> Option<Vec<u8>> {
+        statements
+            .statements()
+            .iter()
+            .filter(|(prop, _s)| *prop == property)
+            .filter_map(|(_prop, s)| s.first())
+            .filter_map(|s| match s.value() {
+                StatementValue::Value(StatementValueContent::String(s)) => Some(s),
+                _ => None,
+            })
+            .map(|s| Self::str2digits(s))
+            .next()
     }
 
     fn vec2array<T, const N: usize>(v: Vec<T>) -> Result<[T; N]> {
