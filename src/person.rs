@@ -151,16 +151,14 @@ impl Person {
         statements: &mut Vec<Statement>,
     ) -> Result<(), StatusCode> {
         let results = Wikidata::search_single_name(api, last_name, "Q101352").await?;
-        if results.len() == 1 {
-            if let Some(entity) = results.first() {
-                let snak = Snak::new_item("P734", entity);
-                let reference = Reference::new(vec![
-                    Wikidata::infernal_reference_snak(),
-                    Snak::new_item("P3452", "Q97033143"), // inferred from person's full name
-                ]);
-                let statement = Statement::new_normal(snak, vec![], vec![reference]);
-                statements.push(statement);
-            }
+        if let [entity] = results.as_slice() {
+            let snak = Snak::new_item("P734", entity);
+            let reference = Reference::new(vec![
+                Wikidata::infernal_reference_snak(),
+                Snak::new_item("P3452", "Q97033143"), // inferred from person's full name
+            ]);
+            let statement = Statement::new_normal(snak, vec![], vec![reference]);
+            statements.push(statement);
         }
         Ok(())
     }
