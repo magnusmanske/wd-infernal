@@ -1,5 +1,4 @@
 use anyhow::{Result, anyhow};
-use chrono::prelude::*;
 use futures::future::join_all;
 use futures::join;
 
@@ -342,27 +341,19 @@ impl Referee {
     }
 
     fn guess_page_language_from_text(text: &str) -> String {
-        let mut ret = "en".to_string(); // Default
-        let mut candidates = HashMap::new();
-
-        // Count occurrences of common words in different languages
-        candidates.insert("en", RE_LANG_EN.find_iter(text).count());
-        candidates.insert("de", RE_LANG_DE.find_iter(text).count());
-        candidates.insert("it", RE_LANG_IT.find_iter(text).count());
-        candidates.insert("fr", RE_LANG_FR.find_iter(text).count());
-        candidates.insert("es", RE_LANG_ES.find_iter(text).count());
-
-        // Find language with highest count
-        let mut best = 0; // Enforce default for incomprehensible text
-        for (language, &count) in &candidates {
-            if count <= best {
-                continue;
-            }
-            best = count;
-            ret = language.to_string();
-        }
-
-        ret
+        let candidates: &[(&str, &Regex)] = &[
+            ("en", &RE_LANG_EN),
+            ("de", &RE_LANG_DE),
+            ("it", &RE_LANG_IT),
+            ("fr", &RE_LANG_FR),
+            ("es", &RE_LANG_ES),
+        ];
+        candidates
+            .iter()
+            .map(|(lang, re)| (*lang, re.find_iter(text).count()))
+            .filter(|(_lang, count)| *count > 0)
+            .max_by_key(|(_lang, count)| *count)
+            .map_or_else(|| "en".to_string(), |(lang, _)| lang.to_string())
     }
 
     async fn get_candidate_urls_from_wikis(&self, entity: &str) -> UniqueUrlCandidates {
@@ -431,40 +422,21 @@ impl Referee {
 
     async fn generate_url_candidates_for_wiki_page(&self, json: &Value) -> Vec<String> {
         let mut had_url = HashSet::new();
-        let mut candidates = vec![];
-        if let Some(query) = json.get("query") {
-            if let Some(pages) = query.get("pages") {
-                if let Some(pages_obj) = pages.as_object() {
-                    for (_, page_info) in pages_obj {
-                        if let Some(extlinks) = page_info.get("extlinks") {
-                            if let Some(links) = extlinks.as_array() {
-                                for link in links {
-                                    if let Some(url) = link.get("*").and_then(|u| u.as_str()) {
-                                        // Basic validation
-                                        if !url.starts_with("http") {
-                                            continue;
-                                        }
-
-                                        // Skip Wikimedia "sources"
-                                        if RE_WIKI.is_match(url) {
-                                            continue;
-                                        }
-
-                                        if had_url.contains(url) {
-                                            continue;
-                                        }
-                                        had_url.insert(url.to_string());
-
-                                        candidates.push(url.to_string());
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        candidates
+        let pages_obj = json
+            .get("query")
+            .and_then(|q| q.get("pages"))
+            .and_then(|p| p.as_object());
+        let Some(pages_obj) = pages_obj else {
+            return vec![];
+        };
+        pages_obj
+            .values()
+            .filter_map(|page_info| page_info.get("extlinks")?.as_array())
+            .flatten()
+            .filter_map(|link| link.get("*")?.as_str())
+            .filter(|url| url.starts_with("http") && !RE_WIKI.is_match(url))
+            .filter_map(|url| had_url.insert(url.to_string()).then(|| url.to_string()))
+            .collect()
     }
 
     async fn generate_url_candidate(&self, url: &str) -> Option<UrlCandidate> {
@@ -756,12 +728,6 @@ impl Referee {
                         let day_num = day.parse::<u32>().unwrap_or(1);
                         let year_num = year.parse::<i32>().unwrap_or(2000);
 
-                        // Format date with Chrono
-                        let _date = NaiveDate::from_ymd_opt(year_num, month_num, day_num)
-                            .unwrap_or_else(|| NaiveDate::from_ymd_opt(2000, 1, 1).unwrap());
-
-                        // Add different date formats
-
                         // Add ISO format
                         ret.push(format!("{year}-{month}-{day}"));
 
@@ -839,55 +805,41 @@ impl Referee {
         Ok(ret)
     }
 
+    fn snak_string_values<'a>(snaks: &'a [Snak], property: &'a str) -> impl Iterator<Item = &'a str> {
+        snaks
+            .iter()
+            .filter(move |snak| snak.property() == property)
+            .filter_map(|snak| match snak.data_value().as_ref()?.value() {
+                wikibase::Value::StringValue(s) => Some(s.as_str()),
+                _ => None,
+            })
+    }
+
     fn does_statement_have_this_reference(
         statement: &EntityStatement,
         url_candidate: &UrlCandidate,
     ) -> bool {
-        let claim = &statement.claim;
-        let references = claim.references();
-
-        for reference in references {
+        statement.claim.references().iter().any(|reference| {
             let snaks = reference.snaks();
 
             // Check for reference URL (P854)
-            let p854_array = snaks
-                .iter()
-                .filter(|snak| snak.property() == "P854")
-                .collect::<Vec<&Snak>>();
-            for snak in p854_array {
-                if let Some(wikibase::Value::StringValue(url)) =
-                    snak.data_value().as_ref().map(|dv| dv.value())
+            if Self::snak_string_values(snaks, "P854").any(|url| url == url_candidate.url) {
+                return true;
+            }
+
+            // Check for reference prop=>value for external-id type
+            if url_candidate.url_type == UrlType::ExternalId {
+                if let (Some(ref_prop), Some(external_id)) =
+                    (&url_candidate.property, &url_candidate.external_id)
                 {
-                    if *url == url_candidate.url {
+                    if Self::snak_string_values(snaks, ref_prop).any(|s| s == external_id) {
                         return true;
                     }
                 }
             }
 
-            // Check for reference prop=>value for external-id type
-            if url_candidate.url_type == UrlType::ExternalId {
-                if let Some(ref_prop) = &url_candidate.property {
-                    let snaks_array = snaks
-                        .iter()
-                        .filter(|snak| snak.property() == ref_prop)
-                        .collect::<Vec<&Snak>>();
-
-                    for snak in snaks_array {
-                        if let Some(wikibase::Value::StringValue(s)) =
-                            snak.data_value().as_ref().map(|dv| dv.value())
-                        {
-                            if let Some(external_id) = &url_candidate.external_id {
-                                if s == external_id {
-                                    return true;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        false
+            false
+        })
     }
 
     async fn is_supported_entity(&mut self, entity: &str) -> Result<bool> {

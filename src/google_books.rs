@@ -82,16 +82,14 @@ impl GoogleBooksFeed {
         }
 
         for format in &entry.format {
-            if let Some(captures) = RE_PAGES.captures(format.as_str()) {
-                if let Some(first_group) = captures.get(1) {
-                    if let Ok(number_of_pages) = first_group.as_str().parse::<i64>() {
-                        isbn2wiki.add_reference(
-                            "P1104",
-                            DataValue::Quantity(number_of_pages),
-                            Reference::prop("P675", &google_books_id),
-                        );
-                    }
-                }
+            if let Some(pages) = Self::capture1(&RE_PAGES, format)
+                .and_then(|s| s.parse::<i64>().ok())
+            {
+                isbn2wiki.add_reference(
+                    "P1104",
+                    DataValue::Quantity(pages),
+                    Reference::prop("P675", &google_books_id),
+                );
             }
             if format == "book" {
                 isbn2wiki.add_reference(
@@ -103,18 +101,16 @@ impl GoogleBooksFeed {
         }
 
         for date in &entry.date {
-            if let Some(captures) = RE_YEAR.captures(date.as_str()) {
-                if let Some(first_group) = captures.get(1) {
-                    let time = format!("+{}-01-01T00:00:00Z", first_group.as_str());
-                    isbn2wiki.add_reference(
-                        "P577",
-                        DataValue::Date {
-                            time,
-                            precision: TimePrecision::Year,
-                        },
-                        Reference::prop("P675", &google_books_id),
-                    );
-                }
+            if let Some(year) = Self::capture1(&RE_YEAR, date) {
+                let time = format!("+{year}-01-01T00:00:00Z");
+                isbn2wiki.add_reference(
+                    "P577",
+                    DataValue::Date {
+                        time,
+                        precision: TimePrecision::Year,
+                    },
+                    Reference::prop("P675", &google_books_id),
+                );
             }
         }
 
@@ -129,44 +125,34 @@ impl GoogleBooksFeed {
         Ok(())
     }
 
+    /// Extract the first capture group from a regex match as a `String`.
+    fn capture1(re: &Regex, text: &str) -> Option<String> {
+        re.captures(text)?.get(1).map(|m| m.as_str().to_string())
+    }
+
     fn extract_google_book_identifiers(
         isbn2wiki: &ISBN2wiki,
         entry: &GoogleBooksEntry,
     ) -> Result<String> {
         let mut google_books_id: Option<String> = None;
         for identifier in &entry.dc_identifier {
-            if let Some(captures) = RE_GOOGLE_BOOKS_ID.captures(identifier.as_str()) {
-                if let Some(first_group) = captures.get(1) {
-                    google_books_id = Some(first_group.as_str().to_string());
-                }
-            };
-            if let Some(captures) = RE_ISBN_10.captures(identifier.as_str()) {
-                if let Some(first_group) = captures.get(1) {
-                    let isbn = first_group.as_str().to_string();
-                    let isbn = format!(
-                        "{}-{}-{}-{}",
-                        &isbn[0..1],
-                        &isbn[1..4],
-                        &isbn[4..9],
-                        &isbn[9..10]
-                    );
-                    isbn2wiki.add_reference("P957", DataValue::String(isbn), Reference::none());
-                }
-            };
-            if let Some(captures) = RE_ISBN_13.captures(identifier.as_str()) {
-                if let Some(first_group) = captures.get(1) {
-                    let isbn = first_group.as_str().to_string();
-                    let isbn = format!(
-                        "{}-{}-{}-{}-{}",
-                        &isbn[0..3],
-                        &isbn[3..4],
-                        &isbn[4..6],
-                        &isbn[6..12],
-                        &isbn[12..13]
-                    );
-                    isbn2wiki.add_reference("P212", DataValue::String(isbn), Reference::none());
-                }
-            };
+            if let Some(id) = Self::capture1(&RE_GOOGLE_BOOKS_ID, identifier) {
+                google_books_id = Some(id);
+            }
+            if let Some(isbn) = Self::capture1(&RE_ISBN_10, identifier) {
+                let formatted = format!(
+                    "{}-{}-{}-{}",
+                    &isbn[0..1], &isbn[1..4], &isbn[4..9], &isbn[9..10]
+                );
+                isbn2wiki.add_reference("P957", DataValue::String(formatted), Reference::none());
+            }
+            if let Some(isbn) = Self::capture1(&RE_ISBN_13, identifier) {
+                let formatted = format!(
+                    "{}-{}-{}-{}-{}",
+                    &isbn[0..3], &isbn[3..4], &isbn[4..6], &isbn[6..12], &isbn[12..13]
+                );
+                isbn2wiki.add_reference("P212", DataValue::String(formatted), Reference::none());
+            }
         }
         let google_books_id = google_books_id.ok_or_else(|| anyhow!("No ID found"))?;
         isbn2wiki.add_reference(

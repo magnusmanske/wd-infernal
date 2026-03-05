@@ -72,39 +72,18 @@ impl Reference {
     }
 
     pub fn is_equivalent(&self, reference: &wikibase_rest_api::Reference) -> bool {
-        if let (Some(property), Some(value)) = (&self.property, &self.value) {
-            reference.parts().iter().any(|prop_value| {
-                let ref_prop = prop_value.property().id();
-                let ref_value = match prop_value.value() {
-                    StatementValue::Value(statement_value_content) => statement_value_content,
-                    _ => return false,
-                };
-                let ref_value = match ref_value {
-                    StatementValueContent::String(s) => s,
-                    _ => return false,
-                    // StatementValueContent::Time { time, precision, calendarmodel } => todo!(),
-                    // StatementValueContent::Location { latitude, longitude, precision, globe } => todo!(),
-                    // StatementValueContent::Quantity { amount, unit } => todo!(),
-                    // StatementValueContent::MonolingualText { language, text } => todo!(),
-                };
-                property == ref_prop && value == ref_value
-            })
-        } else if let Some(url) = &self.url {
-            reference.parts().iter().any(|prop_value| {
-                let ref_prop = prop_value.property().id();
-                let ref_value = match prop_value.value() {
-                    StatementValue::Value(statement_value_content) => statement_value_content,
-                    _ => return false,
-                };
-                let ref_value = match ref_value {
-                    StatementValueContent::String(s) => s,
-                    _ => return false,
-                };
-                ref_prop == "P854" && url == ref_value
-            })
-        } else {
-            false
-        }
+        let (expected_prop, expected_value) = match (&self.property, &self.value, &self.url) {
+            (Some(property), Some(value), _) => (property.as_str(), value.as_str()),
+            (_, _, Some(url)) => ("P854", url.as_str()),
+            _ => return false,
+        };
+        reference.parts().iter().any(|prop_value| {
+            prop_value.property().id() == expected_prop
+                && matches!(
+                    prop_value.value(),
+                    StatementValue::Value(StatementValueContent::String(s)) if s == expected_value
+                )
+        })
     }
 
     pub fn as_ref_group(&self) -> Option<wikibase_rest_api::Reference> {
