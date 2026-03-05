@@ -141,7 +141,7 @@ impl CrossCats {
     ) -> Result<Vec<String>, StatusCode> {
         let category_page = category_sitelink
             .title()
-            .split(":")
+            .split(':')
             .nth(1)
             .unwrap_or("")
             .to_string();
