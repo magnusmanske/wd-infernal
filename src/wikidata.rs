@@ -17,25 +17,29 @@ impl Wikidata {
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
     }
 
-    pub async fn search_items(api: &Api, query: &str) -> Result<Vec<String>, StatusCode> {
+    /// Perform a Wikidata API search and return matching item titles.
+    async fn api_search(api: &Api, query: &str) -> Result<Vec<String>, StatusCode> {
         let params: HashMap<String, String> =
-            hashmap!["action"=>"query","list"=>"search","srnamespace"=>"0","srsearch"=>&query]
+            hashmap!["action"=>"query","list"=>"search","srnamespace"=>"0","srsearch"=>query]
                 .into_iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect();
-        let results = match api.get_query_api_json(&params).await {
-            Ok(v) => v,
-            Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
-        };
+        let results = api
+            .get_query_api_json(&params)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         let results = match results["query"]["search"].as_array() {
             Some(v) => v,
             None => return Ok(vec![]),
         };
-        let results: Vec<String> = results
+        Ok(results
             .iter()
             .filter_map(|result| result["title"].as_str().map(|s| s.to_string()))
-            .collect();
-        Ok(results)
+            .collect())
+    }
+
+    pub async fn search_items(api: &Api, query: &str) -> Result<Vec<String>, StatusCode> {
+        Self::api_search(api, query).await
     }
 
     // Searches Wikidata via the API
@@ -45,23 +49,7 @@ impl Wikidata {
         p31: &str,
     ) -> Result<Vec<String>, StatusCode> {
         let query = format!("{name} haswbstatement:P31={p31}");
-        let params: HashMap<String, String> =
-            hashmap!["action"=>"query","list"=>"search","srnamespace"=>"0","srsearch"=>&query]
-                .into_iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect();
-        let results = match api.get_query_api_json(&params).await {
-            Ok(v) => v,
-            Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
-        };
-        let results = match results["query"]["search"].as_array() {
-            Some(v) => v,
-            None => return Ok(vec![]),
-        };
-        let results: Vec<String> = results
-            .iter()
-            .filter_map(|result| result["title"].as_str().map(|s| s.to_string()))
-            .collect();
+        let results = Self::api_search(api, &query).await?;
         if results.is_empty() {
             return Ok(results);
         }
