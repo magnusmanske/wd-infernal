@@ -39,6 +39,28 @@ impl GivenNames {
         self.male.get(name).or(self.female.get(name)).cloned()
     }
 
+    fn extract_names_for_gender(
+        bindings: &[serde_json::Value],
+        gender_qid: &str,
+    ) -> HashMap<String, usize> {
+        let gender_uri = format!("http://www.wikidata.org/entity/{gender_qid}");
+        bindings
+            .iter()
+            .filter(|binding| binding["gender"]["value"] == gender_uri)
+            .filter_map(|binding| {
+                let uri = binding["q"]["value"].as_str()?;
+                let label = binding["qLabel"]["value"].as_str()?;
+                let qid = uri
+                    .split('/')
+                    .next_back()?
+                    .trim_start_matches('Q')
+                    .parse()
+                    .ok()?;
+                Some((label.to_lowercase(), qid))
+            })
+            .collect()
+    }
+
     async fn new(api: &Api) -> Result<Self> {
         // Load all male and female given names from SPARQL
         let sparql = "SELECT ?q ?qLabel ?gender {
@@ -50,58 +72,8 @@ impl GivenNames {
         let bindings = json["results"]["bindings"]
             .as_array()
             .ok_or(anyhow!("results.bindings are not an array"))?;
-        let male = bindings
-            .iter()
-            .filter(|binding| {
-                binding["gender"]["value"] == "http://www.wikidata.org/entity/Q12308941"
-            })
-            .map(|binding| {
-                (
-                    binding["q"]["value"].as_str(),
-                    binding["qLabel"]["value"].as_str(),
-                )
-            })
-            .filter_map(|(uri_opt, label_opt)| match (uri_opt, label_opt) {
-                (Some(uri), Some(label)) => {
-                    // uri is e.g. "http://www.wikidata.org/entity/Q12345"
-                    // label is the human-readable name string
-                    let qid = uri
-                        .split('/')
-                        .next_back()?
-                        .trim_start_matches('Q')
-                        .parse()
-                        .ok()?;
-                    Some((label.to_lowercase(), qid))
-                }
-                _ => None,
-            })
-            .collect();
-        let female = bindings
-            .iter()
-            .filter(|binding| {
-                binding["gender"]["value"] == "http://www.wikidata.org/entity/Q11879590"
-            })
-            .map(|binding| {
-                (
-                    binding["q"]["value"].as_str(),
-                    binding["qLabel"]["value"].as_str(),
-                )
-            })
-            .filter_map(|(uri_opt, label_opt)| match (uri_opt, label_opt) {
-                (Some(uri), Some(label)) => {
-                    // uri is e.g. "http://www.wikidata.org/entity/Q12345"
-                    // label is the human-readable name string
-                    let qid = uri
-                        .split('/')
-                        .next_back()?
-                        .trim_start_matches('Q')
-                        .parse()
-                        .ok()?;
-                    Some((label.to_lowercase(), qid))
-                }
-                _ => None,
-            })
-            .collect();
+        let male = Self::extract_names_for_gender(bindings, "Q12308941");
+        let female = Self::extract_names_for_gender(bindings, "Q11879590");
         Ok(Self { male, female })
     }
 }
