@@ -83,9 +83,6 @@ static MONTHS: LazyLock<HashMap<u32, HashStringOptionString>> = LazyLock::new(||
     }
     ret
 });
-// static LANGUAGE_DETECTOR: LazyLock<lingua::LanguageDetector> = LazyLock::new(|| {
-//     lingua::LanguageDetectorBuilder::from_all_languages().build()
-// });
 
 // Do not generate references for these item types
 const UNSUPPORTED_ENTITY_MARKERS: &[(&str, &str)] = &[
@@ -311,13 +308,6 @@ impl Referee {
         Ok(ret)
     }
 
-    // fn _other_html2text(&self, html: &str) -> String {
-    //     let ret = html2text::config::plain_no_decorate()
-    //         .string_from_read(html.as_bytes(), usize::MAX)
-    //         .unwrap_or_default();
-    //     ret
-    // }
-
     fn html2text(html: &str) -> String {
         let mut ret = html.replace('\n', " ");
 
@@ -352,33 +342,6 @@ impl Referee {
     }
 
     fn guess_page_language_from_text(text: &str) -> String {
-        Self::manual_guess_page_language_from_text(text)
-    }
-
-    // fn lingua_guess_page_language_from_text(&self, text: &str) -> String {
-    //     let detected_language = LANGUAGE_DETECTOR
-    //         .detect_language_of(text)
-    //         .map(|l| l.iso_code_639_1().to_string());
-    //     let detected_language = detected_language.unwrap_or("en".to_string());
-    //     println!("Detected language: {detected_language}");
-    //     detected_language
-    // }
-
-    // fn whatlang_guess_page_language_from_text(&self, text: &str) -> String {
-    //     match whatlang::detect(text) {
-    //         Some(info) => {
-    //             println!("{info:?}");
-    //             if info.confidence() > 0.5 {
-    //                 info.lang().code().to_string()
-    //             } else {
-    //                 "en".to_string()
-    //             }
-    //         }
-    //         None => "en".to_string(),
-    //     }
-    // }
-
-    fn manual_guess_page_language_from_text(text: &str) -> String {
         let mut ret = "en".to_string(); // Default
         let mut candidates = HashMap::new();
 
@@ -388,9 +351,6 @@ impl Referee {
         candidates.insert("it", RE_LANG_IT.find_iter(text).count());
         candidates.insert("fr", RE_LANG_FR.find_iter(text).count());
         candidates.insert("es", RE_LANG_ES.find_iter(text).count());
-
-        // let it_regex = Regex::new(r"\b(io|tu|lei|lui|chi|che|sono||erano)\b").unwrap();
-        // candidates.insert("it", it_regex.find_iter(text).count());
 
         // Find language with highest count
         let mut best = 0; // Enforce default for incomprehensible text
@@ -1074,13 +1034,6 @@ impl Referee {
         }
         Ok(ret)
     }
-
-    // fn get_linked_entity(&self, statement: &EntityStatement) -> Option<String> {
-    //     match statement.claim.main_snak().data_value().as_ref()?.value() {
-    //         wikibase::Value::Entity(entity_value) => Some(entity_value.id().to_string()),
-    //         _ => None,
-    //     }
-    // }
 
     fn get_date_patterns(language: &str, year: i32, month_num: u32, day_num: u32) -> Vec<String> {
         let mut ret = Vec::new();
