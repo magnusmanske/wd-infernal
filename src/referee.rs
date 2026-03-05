@@ -319,49 +319,36 @@ impl Referee {
     // }
 
     fn html2text(html: &str) -> String {
-        // TODO use _other_html2text
-        let mut ret = html.to_string();
+        let mut ret = html.replace('\n', " ");
 
-        // Step by step replacements similar to the PHP version
-        ret = ret.replace("\n", " ");
-
-        // Remove everything before and including <body>
+        // Extract body content if present
         if let Some(body_pos) = ret.find("<body") {
-            if let Some(close_pos) = ret[body_pos..].find(">") {
-                ret = ret[body_pos + close_pos + 1..].to_string();
+            if let Some(close_pos) = ret[body_pos..].find('>') {
+                ret.drain(..body_pos + close_pos + 1);
             }
         }
-
-        // Remove everything after and including </body>
         if let Some(end_body_pos) = ret.find("</body>") {
-            ret = ret[0..end_body_pos].to_string();
+            ret.truncate(end_body_pos);
         }
 
         // Remove HTML comments
-        ret = RE_HTML_COMMENT.replace_all(&ret, " ").to_string();
-
+        let ret = RE_HTML_COMMENT.replace_all(&ret, " ");
         // Replace closing tags with newlines
-        ret = RE_HTML_CLOSING_BLOCK.replace_all(&ret, "\n").to_string();
-
+        let ret = RE_HTML_CLOSING_BLOCK.replace_all(&ret, "\n");
         // Replace self-closing <br> with newlines
-        ret = RE_HTML_BR_SELF_CLOSE.replace_all(&ret, "\n").to_string();
-
+        let ret = RE_HTML_BR_SELF_CLOSE.replace_all(&ret, "\n");
         // Remove all tags
-        ret = RE_HTML_TAG.replace_all(&ret, " ").to_string();
-
+        let ret = RE_HTML_TAG.replace_all(&ret, " ");
         // Normalize whitespace
-        ret = RE_WHITESPACE.replace_all(&ret, " ").to_string();
+        let ret = RE_WHITESPACE.replace_all(&ret, " ");
 
         // Clean up space + newline combinations
-        ret = ret.replace(" \n", "\n").replace("\n ", "\n");
+        let ret = ret.replace(" \n", "\n").replace("\n ", "\n");
 
         // Collapse multiple newlines
-        ret = RE_NEWLINES.replace_all(&ret, "\n").to_string();
-
+        let ret = RE_NEWLINES.replace_all(&ret, "\n");
         // Collapse multiple spaces
-        ret = RE_SPACES.replace_all(&ret, " ").to_string();
-
-        ret
+        RE_SPACES.replace_all(&ret, " ").into_owned()
     }
 
     fn guess_page_language_from_text(text: &str) -> String {
