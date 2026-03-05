@@ -72,12 +72,12 @@ static MONTHS: LazyLock<HashMap<u32, HashStringOptionString>> = LazyLock::new(||
     */
     let json_string = include_str!("../static/months.json");
     let data: Vec<MonthsJsonRow> = serde_json::from_str(json_string).unwrap();
-    let mut ret = HashMap::new();
+    let mut ret: HashMap<u32, HashStringOptionString> = HashMap::new();
     for row in data {
         if let Ok(month_num) = row.num.parse::<u32>() {
             let value = (row.llabel, row.short);
             ret.entry(month_num)
-                .or_insert_with(HashMap::new)
+                .or_default()
                 .insert(row.language, value);
         }
     }
@@ -259,7 +259,7 @@ impl Referee {
             .map_or(String::new(), |ct| ct.to_str().unwrap_or("").to_string());
 
         if content_type.is_empty() {
-            return Ok("".to_string());
+            return Ok(String::new());
         }
 
         let content = response.text().await?;
