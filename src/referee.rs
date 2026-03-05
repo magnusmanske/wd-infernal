@@ -544,8 +544,7 @@ impl Referee {
 
     // Helper method: get web server for wiki
     fn get_web_server_for_wiki(wiki: &str) -> String {
-        let parts: Vec<&str> = wiki.split("wik").collect();
-        let lang = parts[0];
+        let lang = wiki.split("wik").next().unwrap_or("");
 
         if wiki.ends_with("wiki") {
             format!("{lang}.wikipedia.org")
@@ -1434,6 +1433,42 @@ mod tests {
         assert_eq!(cuc_a.cmp(&cuc_a), std::cmp::Ordering::Equal);
         // partial_cmp must agree with cmp
         assert_eq!(cuc_a.partial_cmp(&cuc_b), Some(std::cmp::Ordering::Less));
+    }
+
+    #[test]
+    fn test_get_web_server_for_wiki_wikipedia() {
+        assert_eq!(
+            Referee::get_web_server_for_wiki("enwiki"),
+            "en.wikipedia.org"
+        );
+        assert_eq!(
+            Referee::get_web_server_for_wiki("dewiki"),
+            "de.wikipedia.org"
+        );
+    }
+
+    #[test]
+    fn test_get_web_server_for_wiki_other_projects() {
+        assert_eq!(
+            Referee::get_web_server_for_wiki("enwikisource"),
+            "en.wikisource.org"
+        );
+        assert_eq!(
+            Referee::get_web_server_for_wiki("frwiktionary"),
+            "fr.wiktionary.org"
+        );
+        assert_eq!(
+            Referee::get_web_server_for_wiki("dewikiquote"),
+            "de.wikiquote.org"
+        );
+    }
+
+    #[test]
+    fn test_get_web_server_for_wiki_no_panic_on_unexpected_input() {
+        // Should not panic even with unusual input
+        let _ = Referee::get_web_server_for_wiki("");
+        let _ = Referee::get_web_server_for_wiki("nowikinhere");
+        let _ = Referee::get_web_server_for_wiki("something");
     }
 
     #[test]
