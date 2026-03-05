@@ -1,7 +1,27 @@
 use anyhow::{Context, Result};
+use reqwest::Client;
 use reqwest::header;
 use serde::Serialize;
 use serde_json::Value;
+use std::sync::LazyLock;
+
+static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(|| {
+    let mut headers = header::HeaderMap::new();
+    headers.insert(
+        header::ACCEPT,
+        "application/json".parse().expect("valid header value"),
+    );
+    headers.insert(
+        header::USER_AGENT,
+        "Wikidata Infernal Search Client/1.0"
+            .parse()
+            .expect("valid header value"),
+    );
+    Client::builder()
+        .default_headers(headers)
+        .build()
+        .expect("Failed to build VIAF HTTP client")
+});
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct RecordId {
@@ -34,28 +54,12 @@ fn nss(nsid: usize, postfix: &str) -> String {
 }
 
 pub async fn search_viaf_for_local_names(query: &str) -> Result<Vec<Record>> {
-    let mut headers = header::HeaderMap::new();
-    headers.insert(header::ACCEPT, "application/json".parse()?);
-    headers.insert(
-        header::USER_AGENT,
-        "Wikidata Infernal Search Client/1.0".parse()?,
-    );
-
-    let client = reqwest::Client::builder()
-        .default_headers(headers)
-        .build()?;
-
-    // URL encode the query
     let encoded_query = urlencoding::encode(query);
-
-    // Construct the URL for searching VIAF
-    // We specifically look for local.names in the query
     let url = format!(
         "https://viaf.org/viaf/search?query=local.names+=+{encoded_query}&maximumRecords=10"
     );
 
-    // Make the HTTP request to VIAF
-    let response = client
+    let response = HTTP_CLIENT
         .get(&url)
         .send()
         .await
