@@ -415,15 +415,12 @@ impl Referee {
             let future = self.generate_url_candidate(url);
             futures.push(future);
         }
-        // println!("LOADING {} Wiki-based candidates", futures.len());
         let url_candidates: HashMap<String, UrlCandidate> = join_all(futures)
             .await
             .into_iter()
             .flatten()
             .map(|uc| (uc.url.clone(), uc))
             .collect();
-        // println!("LOADED  {} Wiki-based candidates", url_candidates.len());
-
         url_candidates
     }
 
@@ -628,15 +625,12 @@ impl Referee {
             let future = self.get_url_candidate_from_external_id(property, external_id, url);
             futures.push(future);
         }
-        // println!("LOADING {} futures for ext_ids", futures.len());
         let ret: UniqueUrlCandidates = join_all(futures)
             .await
             .into_iter()
             .flatten()
             .map(|uc| (uc.url.to_string(), uc))
             .collect();
-        // println!("LOADED  {} futures for ext_ids", ret.len());
-
         ret
     }
 
@@ -695,7 +689,6 @@ impl Referee {
             let future = self.get_contents_from_url(website);
             futures.push(future);
         }
-        // println!("LOADING {} futures for official_websites", futures.len());
         let ret: UniqueUrlCandidates = join_all(futures)
             .await
             .into_iter()
@@ -718,7 +711,6 @@ impl Referee {
                 )
             })
             .collect();
-        // println!("LOADED  {} futures for official_websites", ret.len());
         ret
     }
 

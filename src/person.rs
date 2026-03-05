@@ -116,7 +116,6 @@ impl Person {
             .collect();
         male.retain(|x| !both.contains(x));
         female.retain(|x| !both.contains(x));
-        // println!("Male: {male:?}\nFemale: {female:?}\nBoth: {both:?}");
         let is_male = !male.is_empty();
         let is_female = !female.is_empty();
         match (is_male, is_female) {

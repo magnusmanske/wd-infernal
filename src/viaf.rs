@@ -71,8 +71,6 @@ pub async fn search_viaf_for_local_names(query: &str) -> Result<Vec<Record>> {
     }
 
     let value: Value = response.json().await?;
-    // println!("{:#?}", value);
-
     let records = &value["searchRetrieveResponse"]["records"]["record"];
     let records: Vec<Value> = match records {
         Value::Array(records) => records.to_owned(),
