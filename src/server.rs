@@ -110,9 +110,27 @@ impl Server {
             .map_err(|_e| StatusCode::BAD_REQUEST)?;
         match params.format.as_deref() {
             Some("html") => {
-                let mut html = Self::items2table(&ret);
-                html = format!("<h1>Results</h1><div class='row'>{html}</div>");
-                html = include_str!("../static/result.html").replace("%%RESULT%%", &html);
+                let table = Self::items2table(&ret);
+                let escaped_query = query.replace('&', "&amp;").replace('"', "&quot;");
+                let form = format!(
+                    "<form id='search-form' class='mb-3'>\
+                        <div class='input-group'>\
+                            <input type='text' id='search-input' class='form-control' value=\"{escaped_query}\" placeholder='Search name'>\
+                            <div class='input-group-append'>\
+                                <button type='submit' class='btn btn-primary'>Search</button>\
+                            </div>\
+                        </div>\
+                    </form>\
+                    <script>\
+                        document.getElementById('search-form').addEventListener('submit',function(e){{\
+                            e.preventDefault();\
+                            var n=document.getElementById('search-input').value.trim();\
+                            if(n)window.location.href='/initial_search/'+encodeURIComponent(n)+'?format=html';\
+                        }});\
+                    </script>"
+                );
+                let html = format!("<h1>Results</h1>{form}<div class='row'>{table}</div>");
+                let html = include_str!("../static/result.html").replace("%%RESULT%%", &html);
                 Ok(Html(html).into_response())
             }
             _ => Ok(Json(ret).into_response()),
