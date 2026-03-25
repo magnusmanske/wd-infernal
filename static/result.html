@@ -17,6 +17,48 @@
 	<script src="https://tools-static.wmflabs.org/magnustools/resources/js/wikidata.js"></script>
 	<script src="https://tools-static.wmflabs.org/magnustools/resources/vue/shared.js"></script>
 	<title>Result</title>
+	<style>
+		.results-dimmed {
+			opacity: 0.25;
+			pointer-events: none;
+			transition: opacity 0.3s ease;
+		}
+
+		.results-ready {
+			opacity: 1;
+			transition: opacity 0.3s ease;
+		}
+
+		#loading-indicator {
+			display: none;
+			text-align: center;
+			padding: 1.5rem 0;
+			color: #555;
+			font-size: 0.95rem;
+		}
+
+		#loading-indicator.active {
+			display: block;
+		}
+
+		.loading-spinner {
+			display: inline-block;
+			width: 1.4rem;
+			height: 1.4rem;
+			border: 3px solid #dee2e6;
+			border-top-color: #007bff;
+			border-radius: 50%;
+			animation: result-spin 0.7s linear infinite;
+			vertical-align: middle;
+			margin-right: 0.5rem;
+		}
+
+		@keyframes result-spin {
+			to {
+				transform: rotate(360deg);
+			}
+		}
+	</style>
 </head>
 
 <body>
@@ -25,6 +67,27 @@
 <script>
 	var wd = new WikiData();
 
+	/* ── build & insert the loading indicator between form and results ── */
+	var $resultsRow = $(".container .row").first();
+	var $loadingIndicator = $(
+		'<div id="loading-indicator">' +
+		'<span class="loading-spinner"></span>' +
+		'<span>Loading details\u2026</span>' +
+		"</div>"
+	);
+	$resultsRow.before($loadingIndicator);
+
+	function showLoading() {
+		$resultsRow.removeClass("results-ready").addClass("results-dimmed");
+		$loadingIndicator.addClass("active");
+	}
+
+	function hideLoading() {
+		$resultsRow.removeClass("results-dimmed").addClass("results-ready");
+		$loadingIndicator.removeClass("active");
+	}
+
+	/* ── date formatting helper ── */
 	function formatWdDate(item, prop) {
 		var claims = item.getClaimsForProperty(prop);
 		if (claims.length === 0) return "";
@@ -40,11 +103,7 @@
 		var precision = dateVal.precision || 11;
 		if (precision <= 9) return "" + year;
 		if (precision === 10)
-			return (
-				year +
-				"-" +
-				String(month).padStart(2, "0")
-			);
+			return year + "-" + String(month).padStart(2, "0");
 		return (
 			year +
 			"-" +
@@ -54,32 +113,49 @@
 		);
 	}
 
+	/* ── fetch labels, descriptions & dates, then reveal ── */
 	function updateResultLabels() {
-		let qs = [];
+		var qs = [];
 		$("a[q]").each(function (index, element) {
-			let q = element.getAttribute("q");
-			qs.push(q);
+			qs.push(element.getAttribute("q"));
 		});
+
+		if (qs.length === 0) {
+			hideLoading();
+			return;
+		}
+
+		showLoading();
+
 		wd.getItemBatch(qs, function () {
 			qs.forEach(function (q) {
-				let key = "a[q='" + q + "']";
+				var key = "a[q='" + q + "']";
 				$(key)
 					.attr("href", "https://www.wikidata.org/wiki/" + q)
 					.attr("target", "_blank");
-				let i = wd.getItem(q);
+				var i = wd.getItem(q);
 				if (i === undefined) return;
-				let label = i.getLabel("en");
-				$(key).text(label);
 
-				let desc = i.getDesc("en");
-				$(".desc[data-q='" + q + "']").text(desc);
-
-				let birth = formatWdDate(i, "P569");
-				$(".birth[data-q='" + q + "']").text(birth);
-
-				let death = formatWdDate(i, "P570");
-				$(".death[data-q='" + q + "']").text(death);
+				$(key).text(i.getLabel("en"));
+				$(".desc[data-q='" + q + "']").text(i.getDesc("en"));
+				$(".birth[data-q='" + q + "']").text(formatWdDate(i, "P569"));
+				$(".death[data-q='" + q + "']").text(formatWdDate(i, "P570"));
 			});
+
+			hideLoading();
+		});
+	}
+
+	/* ── dim old results when the user submits a new search ── */
+	var searchForm = document.getElementById("search-form");
+	if (searchForm) {
+		searchForm.addEventListener("submit", function (e) {
+			e.preventDefault();
+			var n = document.getElementById("search-input").value.trim();
+			if (!n) return;
+			showLoading();
+			window.location.href =
+				"/initial_search/" + encodeURIComponent(n) + "?format=html";
 		});
 	}
 

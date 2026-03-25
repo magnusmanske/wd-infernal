@@ -120,14 +120,7 @@ impl Server {
                                 <button type='submit' class='btn btn-primary'>Search</button>\
                             </div>\
                         </div>\
-                    </form>\
-                    <script>\
-                        document.getElementById('search-form').addEventListener('submit',function(e){{\
-                            e.preventDefault();\
-                            var n=document.getElementById('search-input').value.trim();\
-                            if(n)window.location.href='/initial_search/'+encodeURIComponent(n)+'?format=html';\
-                        }});\
-                    </script>"
+                    </form>"
                 );
                 let html = format!("<h1>Results</h1>{form}<div class='row'>{table}</div>");
                 let html = include_str!("../static/result.html").replace("%%RESULT%%", &html);
