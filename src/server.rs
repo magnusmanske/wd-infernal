@@ -89,14 +89,14 @@ impl Server {
             .enumerate()
             .map(|(num, q)| {
                 format!(
-                    "<tr><th>{}</th><td><a q='{q}'>{q}</a></td><td><tt>{q}</tt></td></tr>",
+                    "<tr><th>{}</th><td><a q='{q}'>{q}</a></td><td><tt>{q}</tt></td><td class='desc' data-q='{q}'></td><td class='birth' data-q='{q}'></td><td class='death' data-q='{q}'></td></tr>",
                     num + 1
                 )
             })
             .collect::<Vec<String>>()
             .join("\n");
         html = format!(
-            "<table class='table table-striped'><thead><th>#</th><th>Label</th><th>Item</th></thead><tbody>{html}</tbody></table>"
+            "<table class='table table-striped'><thead><th>#</th><th>Label</th><th>Item</th><th>Description</th><th>Born</th><th>Died</th></thead><tbody>{html}</tbody></table>"
         );
         html
     }
@@ -308,10 +308,16 @@ mod tests {
             html.contains("table-striped"),
             "table should have table-striped class"
         );
-        // Must have thead with the three column headers
+        // Must have thead with the six column headers
         assert!(html.contains("<thead>"), "should have thead");
         assert!(html.contains("Label"), "should have Label header");
         assert!(html.contains("Item"), "should have Item header");
+        assert!(
+            html.contains("Description"),
+            "should have Description header"
+        );
+        assert!(html.contains("Born"), "should have Born header");
+        assert!(html.contains("Died"), "should have Died header");
         // Must have tbody
         assert!(html.contains("<tbody>"), "should have tbody");
     }

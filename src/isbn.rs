@@ -552,7 +552,7 @@ mod tests {
 
     #[test]
     fn test_vec2array_correct_length() {
-        let v = vec![1u8, 2, 3];
+        let v = vec![1_u8, 2, 3];
         let result: Result<[u8; 3]> = ISBN2wiki::vec2array(v);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), [1, 2, 3]);
@@ -560,7 +560,7 @@ mod tests {
 
     #[test]
     fn test_vec2array_wrong_length() {
-        let v = vec![1u8, 2];
+        let v = vec![1_u8, 2];
         let result: Result<[u8; 3]> = ISBN2wiki::vec2array(v);
         assert!(result.is_err());
     }
@@ -578,14 +578,20 @@ mod tests {
     fn test_generate_patch_produces_valid_patch() {
         let isbn2wiki = ISBN2wiki::new("9782267027006").unwrap();
         let patch = isbn2wiki.generate_patch("Q1234");
-        assert!(patch.is_ok(), "generate_patch should succeed for valid item ID");
+        assert!(
+            patch.is_ok(),
+            "generate_patch should succeed for valid item ID"
+        );
     }
 
     #[test]
     fn test_generate_patch_invalid_entity_id() {
         let isbn2wiki = ISBN2wiki::new("9782267027006").unwrap();
         let patch = isbn2wiki.generate_patch("not-a-valid-id");
-        assert!(patch.is_err(), "generate_patch should fail for invalid entity ID");
+        assert!(
+            patch.is_err(),
+            "generate_patch should fail for invalid entity ID"
+        );
     }
 
     // ── isbn fallback for None ───────────────────────────────────────────────

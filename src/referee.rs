@@ -435,7 +435,8 @@ impl Referee {
             .flatten()
             .filter_map(|link| link.get("*")?.as_str())
             .filter(|url| url.starts_with("http") && !RE_WIKI.is_match(url))
-            .filter_map(|url| had_url.insert(url.to_string()).then(|| url.to_string()))
+            .filter(|&url| had_url.insert(url.to_string()))
+            .map(|url| url.to_string())
             .collect()
     }
 
@@ -805,7 +806,10 @@ impl Referee {
         Ok(ret)
     }
 
-    fn snak_string_values<'a>(snaks: &'a [Snak], property: &'a str) -> impl Iterator<Item = &'a str> {
+    fn snak_string_values<'a>(
+        snaks: &'a [Snak],
+        property: &'a str,
+    ) -> impl Iterator<Item = &'a str> {
         snaks
             .iter()
             .filter(move |snak| snak.property() == property)
@@ -950,8 +954,7 @@ impl Referee {
                         .iter()
                         .filter(|p| !p.trim().is_empty())
                         .filter_map(|pattern| {
-                            let re_pattern =
-                                format!(r"\b(.{{0,60}})\b({pattern})\b(.{{0,60}})\b");
+                            let re_pattern = format!(r"\b(.{{0,60}})\b({pattern})\b(.{{0,60}})\b");
                             Regex::new(&re_pattern).ok()
                         })
                         .collect();
@@ -1453,6 +1456,8 @@ mod tests {
             claim,
         };
         let uc = make_url_candidate("https://example.com");
-        assert!(!Referee::does_statement_have_this_reference(&statement, &uc));
+        assert!(!Referee::does_statement_have_this_reference(
+            &statement, &uc
+        ));
     }
 }
