@@ -113,6 +113,19 @@
 		);
 	}
 
+	/* ── fetch a single autodesc description ── */
+	function fetchAutodesc(q) {
+		$.ajax({
+			url: "https://autodesc.toolforge.org/",
+			data: { q: q, lang: "en", mode: "short", format: "json" },
+			dataType: "json"
+		}).done(function (data) {
+			if (data && data.result) {
+				$(".desc[data-q='" + q + "'] .autodesc").html(data.result);
+			}
+		});
+	}
+
 	/* ── fetch labels, descriptions & dates, then reveal ── */
 	function updateResultLabels() {
 		var qs = [];
@@ -137,9 +150,11 @@
 				if (i === undefined) return;
 
 				$(key).text(i.getLabel("en"));
-				$(".desc[data-q='" + q + "']").text(i.getDesc("en"));
+				$(".desc[data-q='" + q + "'] .wd-desc").text(i.getDesc("en"));
 				$(".birth[data-q='" + q + "']").text(formatWdDate(i, "P569"));
 				$(".death[data-q='" + q + "']").text(formatWdDate(i, "P570"));
+
+				fetchAutodesc(q);
 			});
 
 			hideLoading();

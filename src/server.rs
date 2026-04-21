@@ -89,7 +89,7 @@ impl Server {
             .enumerate()
             .map(|(num, q)| {
                 format!(
-                    "<tr><th>{}</th><td><a q='{q}'>{q}</a></td><td><tt>{q}</tt></td><td class='desc' data-q='{q}'></td><td class='birth' data-q='{q}'></td><td class='death' data-q='{q}'></td></tr>",
+                    "<tr><th>{}</th><td><a q='{q}'>{q}</a></td><td><tt>{q}</tt></td><td class='desc' data-q='{q}'><div class='wd-desc'></div><div class='autodesc text-muted small font-italic'></div></td><td class='birth' data-q='{q}'></td><td class='death' data-q='{q}'></td></tr>",
                     num + 1
                 )
             })
@@ -110,7 +110,6 @@ impl Server {
             .map_err(|_e| StatusCode::BAD_REQUEST)?;
         match params.format.as_deref() {
             Some("html") => {
-                let table = Self::items2table(&ret);
                 let escaped_query = query.replace('&', "&amp;").replace('"', "&quot;");
                 let form = format!(
                     "<form id='search-form' class='mb-3'>\
@@ -122,7 +121,15 @@ impl Server {
                         </div>\
                     </form>"
                 );
-                let html = format!("<h1>Results</h1>{form}<div class='row'>{table}</div>");
+                let body = if ret.is_empty() {
+                    format!(
+                        "<div class='alert alert-warning' role='alert'>No results found for <strong>{escaped_query}</strong>.</div>"
+                    )
+                } else {
+                    let table = Self::items2table(&ret);
+                    format!("<div class='row'>{table}</div>")
+                };
+                let html = format!("<h1>Results</h1>{form}{body}");
                 let html = include_str!("../static/result.html").replace("%%RESULT%%", &html);
                 Ok(Html(html).into_response())
             }
