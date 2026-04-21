@@ -7,7 +7,6 @@ use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 use wikibase_rest_api::prelude::*;
-use wikibase_rest_api::statements_patch::StatementsPatch;
 
 static RE_GOODREADS_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"/(\d+)\.jpg$").unwrap());
 static LANGUAGE_LABELS: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
@@ -260,7 +259,7 @@ impl ISBN2wiki {
         Ok(ret)
     }
 
-    pub fn generate_patch(&self, item_id: &str) -> Result<StatementsPatch> {
+    pub fn generate_patch(&self, item_id: &str) -> Result<impl Patch> {
         let entity_id = EntityId::new(item_id)?;
         let statements_old = Statements::default();
         let mut statements_new = statements_old.clone();

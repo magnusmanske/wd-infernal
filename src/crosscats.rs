@@ -1,5 +1,6 @@
 use async_lazy::Lazy;
 use axum::http::StatusCode;
+use futures::StreamExt;
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -178,40 +179,38 @@ impl CrossCats {
         items: Vec<String>,
         item_info: &mut HashMap<String, ItemInfo>,
     ) -> Result<(), StatusCode> {
-        let entity_container = EntityContainer::builder()
-            .api(REST_API.clone())
-            .max_concurrent(5)
-            .build()
-            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-        let entity_ids = items
-            .iter()
-            .map(|item| EntityId::new(item.to_owned()))
-            .collect::<Result<Vec<_>, RestApiError>>()
-            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-        entity_container
-            .load(&entity_ids)
-            .await
-            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-        entity_container
-            .items()
-            .read()
-            .await
-            .iter()
-            .filter(|(_q, item)| {
-                item.statements().property("P31").iter().any(|statement| {
-                    !matches!(statement.value(), StatementValue::Value(StatementValueContent::String(s)) if s == "Q4167410") // disambiguation page
-                })
-            })
-            .map(|(q, item)| (q, item.sitelinks().get_wiki(&target_wiki)))
-            .filter(|(_q, sitelink)| sitelink.is_some())
-            .map(|(q, sitelink)| (q, sitelink.unwrap()))
-            .map(|(q, sitelink)| (q, sitelink.title()))
-            .map(|(q, title)| (q.to_string(), title.to_string()))
-            .for_each(|(q, title)| {
-                if let Some(info) = item_info.get_mut(&q) {
-                    info.local_page = Some(title);
-                }
+        let item_entity_ids: Vec<EntityId> = items
+            .into_iter()
+            .filter_map(|id| EntityId::new(id).ok())
+            .filter(|eid| matches!(eid, EntityId::Item(_)))
+            .collect();
+        let fetches = item_entity_ids.into_iter().map(|eid| {
+            let api = REST_API.clone();
+            async move { Item::get(eid, &api).await }
+        });
+        let loaded_items: Vec<Item> = futures::stream::iter(fetches)
+            .buffer_unordered(5)
+            .filter_map(|res: Result<Item, RestApiError>| async move { res.ok() })
+            .collect()
+            .await;
+
+        for item in &loaded_items {
+            let q = match item.id().id() {
+                Ok(id) => id.to_string(),
+                Err(_) => continue,
+            };
+            let is_disambiguation = item.statements().property("P31").iter().any(|statement| {
+                matches!(statement.value(), StatementValue::Value(StatementValueContent::String(s)) if s == "Q4167410")
             });
+            if is_disambiguation {
+                continue;
+            }
+            if let Some(sitelink) = item.sitelinks().get_wiki(&target_wiki) {
+                if let Some(info) = item_info.get_mut(&q) {
+                    info.local_page = Some(sitelink.title().to_string());
+                }
+            }
+        }
         Ok(())
     }
 
