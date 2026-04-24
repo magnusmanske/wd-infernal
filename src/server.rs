@@ -35,7 +35,10 @@ impl Server {
     pub async fn start() -> Result<(), Box<dyn std::error::Error>> {
         tracing_subscriber::fmt::init();
 
-        let cors = CorsLayer::new().allow_origin(Any);
+        let cors = CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any);
 
         let app = Router::new()
             .route("/", get(Self::root))
