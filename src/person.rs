@@ -55,23 +55,78 @@ fn class_bit(qid: &str) -> u8 {
 type NameHitCache = HashMap<String, Vec<NameHit>>;
 static NAME_CACHE: LazyLock<RwLock<NameHitCache>> = LazyLock::new(|| RwLock::new(HashMap::new()));
 
+/// Nobiliary particles / surname prefixes (German "von", Dutch "van der",
+/// French/Spanish "de la", Italian "di"/"della", Arabic "al"/"bin", Celtic
+/// "mac"/"o'", etc.). When one of these precedes the final surname word it is
+/// part of the family name, not a given name. Matched case-insensitively.
+static SURNAME_PARTICLES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    [
+        // German / Austrian / Swiss
+        "von", "vom", "zu", "zum", "zur", "der", "dem", "den", "und",
+        // Dutch / Flemish (tussenvoegsel)
+        "van", "ter", "ten", "te", "op", "'t",
+        // French
+        "de", "du", "des", "la", "le", "les", "d'",
+        // Italian
+        "di", "da", "del", "dello", "della", "dei", "degli", "delle", "dal",
+        "dalla", "dalle", "lo", "li", "de'",
+        // Spanish / Portuguese / Galician
+        "las", "los", "do", "dos", "das",
+        // Arabic / Persian
+        "al", "el", "bin", "ben", "ibn", "abu", "abd", "bint", "abdel", "abdul",
+        // Hebrew
+        "bar", "ha",
+        // Irish / Scottish / Welsh
+        "mac", "mc", "o'", "ó", "ní", "nic", "ua", "ap", "ab",
+        // Scandinavian
+        "af", "av",
+    ]
+    .into_iter()
+    .collect()
+});
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Person;
 
 impl Person {
     pub async fn name_gender(name: &str) -> Result<Vec<Statement>, StatusCode> {
-        let mut parts = name.split_whitespace().collect::<Vec<_>>();
-        let last_name = match parts.pop() {
-            Some(last_name) => last_name,
-            None => return Ok(vec![]), // No name, return empty set
-        };
-        let first_names = parts;
+        let tokens: Vec<&str> = name.split_whitespace().collect();
+        if tokens.is_empty() {
+            return Ok(vec![]); // No name, return empty set
+        }
+        let (first_names, surname_words) = Self::split_name(&tokens);
+        let surname_full = surname_words.join(" ");
+        // The final word of the surname, used as a fallback family-name lookup
+        // when the full phrase (incl. particle) has no family-name item.
+        let surname_core = (*surname_words.last().unwrap_or(&"")).to_string();
 
         let mut all_tokens: Vec<&str> = first_names.clone();
-        all_tokens.push(last_name);
+        all_tokens.push(surname_full.as_str());
+        if surname_core != surname_full {
+            all_tokens.push(surname_core.as_str());
+        }
         let lookup = Self::gather_hits(&all_tokens).await;
 
-        Ok(Self::resolve(&first_names, last_name, &lookup))
+        Ok(Self::resolve(
+            &first_names,
+            &surname_full,
+            &surname_core,
+            &lookup,
+        ))
+    }
+
+    /// Split a whitespace-tokenized name into given names and surname words.
+    /// The surname is the trailing run that starts at the earliest nobiliary
+    /// particle directly preceding the final word, so `Otto von Bismarck`
+    /// yields given name `Otto` and surname `von Bismarck`. Particles never
+    /// end up among the given names.
+    fn split_name<'a>(tokens: &[&'a str]) -> (Vec<&'a str>, Vec<&'a str>) {
+        // The last token is always part of the surname.
+        let mut start = tokens.len().saturating_sub(1);
+        while start > 0 && SURNAME_PARTICLES.contains(tokens[start - 1].to_lowercase().as_str()) {
+            start -= 1;
+        }
+        (tokens[..start].to_vec(), tokens[start..].to_vec())
     }
 
     /// Look up all the given tokens, returning a map from token to matched name
@@ -262,7 +317,8 @@ impl Person {
     /// gender (P21), and given names (P735).
     fn resolve(
         first_names: &[&str],
-        last_name: &str,
+        surname_full: &str,
+        surname_core: &str,
         lookup: &NameHitCache,
     ) -> Vec<Statement> {
         let empty: Vec<NameHit> = Vec::new();
@@ -281,10 +337,16 @@ impl Person {
         let mut statements = Vec::new();
 
         // Family name (P734) — only when there is a single unambiguous match.
-        let family_pool = Self::class_pool(get(last_name), FAMILY);
-        let mut family_qids: Vec<&str> = family_pool.iter().map(|hit| hit.qid.as_str()).collect();
-        family_qids.sort_unstable();
-        family_qids.dedup();
+        // Prefer the full surname phrase including any particle ("van
+        // Beethoven"); fall back to the bare final word ("Beethoven").
+        let family_qids = {
+            let full = Self::family_qids(get(surname_full));
+            if full.is_empty() && surname_core != surname_full {
+                Self::family_qids(get(surname_core))
+            } else {
+                full
+            }
+        };
         if let [qid] = family_qids.as_slice() {
             statements.push(Self::name_statement("P734", qid));
         }
@@ -306,6 +368,17 @@ impl Person {
         }
 
         statements
+    }
+
+    /// Distinct, sorted family-name (P734) item Q-ids matched for a token.
+    fn family_qids(hits: &[NameHit]) -> Vec<String> {
+        let mut qids: Vec<String> = Self::class_pool(hits, FAMILY)
+            .iter()
+            .map(|hit| hit.qid.clone())
+            .collect();
+        qids.sort_unstable();
+        qids.dedup();
+        qids
     }
 
     /// The hits for a token that match `class_mask`, preferring label matches
@@ -471,6 +544,69 @@ mod tests {
             property_values(&results, "P21"),
             vec!["Q6581072".to_string()],
             "expected exactly one female gender statement"
+        );
+    }
+
+    fn split(name: &str) -> (Vec<&str>, String) {
+        let tokens: Vec<&str> = name.split_whitespace().collect();
+        let (first, surname) = Person::split_name(&tokens);
+        (first, surname.join(" "))
+    }
+
+    #[test]
+    fn test_split_name_plain() {
+        assert_eq!(split("Heinrich Magnus Manske"), (vec!["Heinrich", "Magnus"], "Manske".to_string()));
+    }
+
+    #[test]
+    fn test_split_name_single_word() {
+        assert_eq!(split("Manske"), (Vec::<&str>::new(), "Manske".to_string()));
+    }
+
+    #[test]
+    fn test_split_name_particles() {
+        // Particles must join the surname and never appear among given names.
+        assert_eq!(split("Otto von Bismarck"), (vec!["Otto"], "von Bismarck".to_string()));
+        assert_eq!(split("Ludwig van Beethoven"), (vec!["Ludwig"], "van Beethoven".to_string()));
+        assert_eq!(split("Charles de Gaulle"), (vec!["Charles"], "de Gaulle".to_string()));
+        assert_eq!(split("Leonardo da Vinci"), (vec!["Leonardo"], "da Vinci".to_string()));
+    }
+
+    #[test]
+    fn test_split_name_multi_word_particles() {
+        assert_eq!(split("Ursula von der Leyen"), (vec!["Ursula"], "von der Leyen".to_string()));
+        assert_eq!(
+            split("Stephanie von und zu Guttenberg"),
+            (vec!["Stephanie"], "von und zu Guttenberg".to_string())
+        );
+    }
+
+    #[test]
+    fn test_split_name_case_insensitive_and_no_given_name() {
+        // Mixed-case particle still recognised.
+        assert_eq!(split("Otto Von Bismarck"), (vec!["Otto"], "Von Bismarck".to_string()));
+        // Leading particle with no given name.
+        assert_eq!(split("von Bismarck"), (Vec::<&str>::new(), "von Bismarck".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_name_gender_particle_surname() {
+        let _guard = NET_TEST_LOCK.lock().await;
+        // "Ludwig van Beethoven" — male, and "van" must not be a given name.
+        let results = Person::name_gender("Ludwig van Beethoven").await.unwrap();
+        if results.is_empty() {
+            return;
+        }
+        assert_eq!(
+            property_values(&results, "P21"),
+            vec!["Q6581097".to_string()],
+            "expected male gender"
+        );
+        // No given-name statement should be the particle's item; at most one
+        // given name ("Ludwig") is expected.
+        assert!(
+            property_values(&results, "P735").len() <= 1,
+            "particle should not produce extra given-name statements"
         );
     }
 
