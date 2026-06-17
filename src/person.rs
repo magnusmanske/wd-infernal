@@ -268,22 +268,15 @@ impl Person {
         let empty: Vec<NameHit> = Vec::new();
         let get = |token: &str| lookup.get(token).unwrap_or(&empty).as_slice();
 
-        // Tally gender votes across every given name.
-        let mut has_male = false;
-        let mut has_female = false;
-        for token in first_names {
-            match Self::token_vote(get(token)) {
-                Some(true) => has_male = true,
-                Some(false) => has_female = true,
-                None => {}
-            }
-        }
-        // Abstain on conflict (a name with both male and female given names).
-        let resolved_gender = match (has_male, has_female) {
-            (true, false) => Some(Q_MALE_GENDER),
-            (false, true) => Some(Q_FEMALE_GENDER),
-            _ => None,
-        };
+        // Gender is decided by position: the first given name that yields a
+        // confident vote wins. Later (middle) names only get a say when every
+        // earlier name was inconclusive. This reflects how cross-gender names
+        // are used — "Maria" alone is female, but as a middle name it does not
+        // override a leading male name ("Rainer Maria Rilke" is male).
+        let resolved_gender = first_names
+            .iter()
+            .find_map(|token| Self::token_vote(get(token)))
+            .map(|is_male| if is_male { Q_MALE_GENDER } else { Q_FEMALE_GENDER });
 
         let mut statements = Vec::new();
 
@@ -375,11 +368,17 @@ impl Person {
             0
         };
         if gender_bit != 0 {
-            return pool
+            if let Some(hit) = pool
                 .iter()
                 .copied()
                 .filter(|hit| hit.classes & gender_bit != 0)
-                .min_by(|a, b| a.qid.cmp(&b.qid));
+                .min_by(|a, b| a.qid.cmp(&b.qid))
+            {
+                return Some(hit);
+            }
+            // Fall through: the resolved gender has no matching item for this
+            // token (e.g. a middle name of the other gender); still record it
+            // when there is a single unambiguous candidate.
         }
         let mut qids: Vec<&str> = pool.iter().map(|hit| hit.qid.as_str()).collect();
         qids.sort_unstable();
@@ -472,6 +471,22 @@ mod tests {
             property_values(&results, "P21"),
             vec!["Q6581072".to_string()],
             "expected exactly one female gender statement"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_name_gender_cross_gender_middle_name() {
+        let _guard = NET_TEST_LOCK.lock().await;
+        // "Rainer Maria Rilke" — "Maria" is also a male given name, but as a
+        // middle name it must not neutralize the leading male name "Rainer".
+        let results = Person::name_gender("Rainer Maria Rilke").await.unwrap();
+        if results.is_empty() {
+            return;
+        }
+        assert_eq!(
+            property_values(&results, "P21"),
+            vec!["Q6581097".to_string()],
+            "leading male given name should decide the gender"
         );
     }
 
