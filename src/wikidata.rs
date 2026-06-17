@@ -42,8 +42,9 @@ impl Wikidata {
         Self::api_search(api, query).await
     }
 
-    // Searches Wikidata via the API
-    pub async fn search_single_name(
+    /// Searches Wikidata via the API for items with the exact label `name` that
+    /// are an instance of (P31) the class `p31`. Returns *all* matching items.
+    pub async fn search_names_by_class(
         api: &Api,
         name: &str,
         p31: &str,
@@ -69,8 +70,18 @@ impl Wikidata {
         let mut items = api.entities_from_sparql_result(&json, "q");
         items.sort();
         items.dedup();
+        Ok(items)
+    }
 
-        // If there are multiple items, return none
+    /// Like [`Self::search_names_by_class`] but returns an item only when there
+    /// is exactly one match. Used where a unique item is required (family names).
+    pub async fn search_single_name(
+        api: &Api,
+        name: &str,
+        p31: &str,
+    ) -> Result<Vec<String>, StatusCode> {
+        let mut items = Self::search_names_by_class(api, name, p31).await?;
+        // If there are multiple items, the match is ambiguous: return none.
         if items.len() > 1 {
             items.clear();
         }
