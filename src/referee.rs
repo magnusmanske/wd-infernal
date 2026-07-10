@@ -494,8 +494,8 @@ impl Referee {
 
         let mut ret = from_wikis
             .into_iter()
-            .chain(official_websites.into_iter())
-            .chain(external_ids.into_iter())
+            .chain(official_websites)
+            .chain(external_ids)
             .collect();
 
         self.add_stated_in(&mut ret).await?;
@@ -505,9 +505,7 @@ impl Referee {
 
     async fn add_stated_in(&self, concise_urls: &mut HashMap<String, UrlCandidate>) -> Result<()> {
         // Ensure all used properties are loaded
-        let mut properties: Vec<String> = concise_urls
-            .iter()
-            .filter_map(|(_k, v)| v.property.to_owned())
+        let mut properties: Vec<String> = concise_urls.values().filter_map(|v| v.property.to_owned())
             .filter(|p| !self.entities.has_entity(p))
             .collect();
         properties.sort();
@@ -653,7 +651,7 @@ impl Referee {
         let described_at_url = Self::get_string_values_for_property(&item, "P973");
         let mut websites: Vec<_> = official_websites
             .into_iter()
-            .chain(described_at_url.into_iter())
+            .chain(described_at_url)
             .collect();
         websites.sort();
         websites.dedup();

@@ -42,6 +42,7 @@ impl Server {
 
         let app = Router::new()
             .route("/", get(Self::root))
+            .route("/healthz", get(Self::healthz))
             .route("/P131/:latitude/:longitude", get(Self::p131))
             .route("/name_gender/:name", get(Self::name_gender))
             .route("/country_year/:item/:year", get(Self::country_year))
@@ -79,6 +80,10 @@ impl Server {
         // TODOO env::var("WD_INFERNAL_ADDRESS")
 
         SocketAddr::from((address, port))
+    }
+
+    async fn healthz() -> impl IntoResponse {
+        StatusCode::OK
     }
 
     async fn root() -> impl IntoResponse {
