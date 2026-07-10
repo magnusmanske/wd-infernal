@@ -64,21 +64,15 @@ static SURNAME_PARTICLES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
         // German / Austrian / Swiss
         "von", "vom", "zu", "zum", "zur", "der", "dem", "den", "und",
         // Dutch / Flemish (tussenvoegsel)
-        "van", "ter", "ten", "te", "op", "'t",
-        // French
-        "de", "du", "des", "la", "le", "les", "d'",
-        // Italian
-        "di", "da", "del", "dello", "della", "dei", "degli", "delle", "dal",
-        "dalla", "dalle", "lo", "li", "de'",
-        // Spanish / Portuguese / Galician
-        "las", "los", "do", "dos", "das",
-        // Arabic / Persian
+        "van", "ter", "ten", "te", "op", "'t", // French
+        "de", "du", "des", "la", "le", "les", "d'", // Italian
+        "di", "da", "del", "dello", "della", "dei", "degli", "delle", "dal", "dalla", "dalle", "lo",
+        "li", "de'", // Spanish / Portuguese / Galician
+        "las", "los", "do", "dos", "das", // Arabic / Persian
         "al", "el", "bin", "ben", "ibn", "abu", "abd", "bint", "abdel", "abdul",
         // Hebrew
-        "bar", "ha",
-        // Irish / Scottish / Welsh
-        "mac", "mc", "o'", "ó", "ní", "nic", "ua", "ap", "ab",
-        // Scandinavian
+        "bar", "ha", // Irish / Scottish / Welsh
+        "mac", "mc", "o'", "ó", "ní", "nic", "ua", "ap", "ab", // Scandinavian
         "af", "av",
     ]
     .into_iter()
@@ -171,7 +165,10 @@ impl Person {
             }
         } else {
             for token in &misses {
-                result.insert(token.clone(), fetched.get(token).cloned().unwrap_or_default());
+                result.insert(
+                    token.clone(),
+                    fetched.get(token).cloned().unwrap_or_default(),
+                );
             }
         }
         result
@@ -272,13 +269,11 @@ impl Person {
             Ok(api) => api,
             Err(_) => return HashMap::new(),
         };
-        let futures = tokens.iter().map(|token| Self::api_lookup_token(&api, token));
-        let results = join_all(futures).await;
-        tokens
+        let futures = tokens
             .iter()
-            .cloned()
-            .zip(results)
-            .collect()
+            .map(|token| Self::api_lookup_token(&api, token));
+        let results = join_all(futures).await;
+        tokens.iter().cloned().zip(results).collect()
     }
 
     async fn api_lookup_token(api: &Api, token: &str) -> Vec<NameHit> {
@@ -332,7 +327,13 @@ impl Person {
         let resolved_gender = first_names
             .iter()
             .find_map(|token| Self::token_vote(get(token)))
-            .map(|is_male| if is_male { Q_MALE_GENDER } else { Q_FEMALE_GENDER });
+            .map(|is_male| {
+                if is_male {
+                    Q_MALE_GENDER
+                } else {
+                    Q_FEMALE_GENDER
+                }
+            });
 
         let mut statements = Vec::new();
 
@@ -503,7 +504,7 @@ mod tests {
         }
     }
 
-    fn property_values<'a>(statements: &'a [Statement], property: &str) -> Vec<String> {
+    fn property_values(statements: &[Statement], property: &str) -> Vec<String> {
         statements
             .iter()
             .filter(|s| s.main_snak().property() == property)
@@ -555,7 +556,10 @@ mod tests {
 
     #[test]
     fn test_split_name_plain() {
-        assert_eq!(split("Heinrich Magnus Manske"), (vec!["Heinrich", "Magnus"], "Manske".to_string()));
+        assert_eq!(
+            split("Heinrich Magnus Manske"),
+            (vec!["Heinrich", "Magnus"], "Manske".to_string())
+        );
     }
 
     #[test]
@@ -566,15 +570,30 @@ mod tests {
     #[test]
     fn test_split_name_particles() {
         // Particles must join the surname and never appear among given names.
-        assert_eq!(split("Otto von Bismarck"), (vec!["Otto"], "von Bismarck".to_string()));
-        assert_eq!(split("Ludwig van Beethoven"), (vec!["Ludwig"], "van Beethoven".to_string()));
-        assert_eq!(split("Charles de Gaulle"), (vec!["Charles"], "de Gaulle".to_string()));
-        assert_eq!(split("Leonardo da Vinci"), (vec!["Leonardo"], "da Vinci".to_string()));
+        assert_eq!(
+            split("Otto von Bismarck"),
+            (vec!["Otto"], "von Bismarck".to_string())
+        );
+        assert_eq!(
+            split("Ludwig van Beethoven"),
+            (vec!["Ludwig"], "van Beethoven".to_string())
+        );
+        assert_eq!(
+            split("Charles de Gaulle"),
+            (vec!["Charles"], "de Gaulle".to_string())
+        );
+        assert_eq!(
+            split("Leonardo da Vinci"),
+            (vec!["Leonardo"], "da Vinci".to_string())
+        );
     }
 
     #[test]
     fn test_split_name_multi_word_particles() {
-        assert_eq!(split("Ursula von der Leyen"), (vec!["Ursula"], "von der Leyen".to_string()));
+        assert_eq!(
+            split("Ursula von der Leyen"),
+            (vec!["Ursula"], "von der Leyen".to_string())
+        );
         assert_eq!(
             split("Stephanie von und zu Guttenberg"),
             (vec!["Stephanie"], "von und zu Guttenberg".to_string())
@@ -584,9 +603,15 @@ mod tests {
     #[test]
     fn test_split_name_case_insensitive_and_no_given_name() {
         // Mixed-case particle still recognised.
-        assert_eq!(split("Otto Von Bismarck"), (vec!["Otto"], "Von Bismarck".to_string()));
+        assert_eq!(
+            split("Otto Von Bismarck"),
+            (vec!["Otto"], "Von Bismarck".to_string())
+        );
         // Leading particle with no given name.
-        assert_eq!(split("von Bismarck"), (Vec::<&str>::new(), "von Bismarck".to_string()));
+        assert_eq!(
+            split("von Bismarck"),
+            (Vec::<&str>::new(), "von Bismarck".to_string())
+        );
     }
 
     #[tokio::test]
@@ -630,7 +655,10 @@ mod tests {
     async fn test_name_gender_empty() {
         // Empty string: no name parts at all.
         let results = Person::name_gender("").await.unwrap();
-        assert!(results.is_empty(), "empty name should produce no statements");
+        assert!(
+            results.is_empty(),
+            "empty name should produce no statements"
+        );
     }
 
     #[tokio::test]
