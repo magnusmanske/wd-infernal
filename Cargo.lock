@@ -4003,7 +4003,7 @@ dependencies = [
 [[package]]
 name = "wikimisc"
 version = "0.1.0"
-source = "git+https://github.com/magnusmanske/wikimisc.git#b74362b547652e3f969ffeb9e612f256d7e9ca79"
+source = "git+https://github.com/magnusmanske/wikimisc.git#eb28323bcc1cc24892005888edbe84fd1ed1b115"
 dependencies = [
  "mysql_async",
  "serde_json",
