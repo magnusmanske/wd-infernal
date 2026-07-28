@@ -39,6 +39,9 @@
     clippy::wildcard_imports
 )]
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use serde_json::json;
 use std::fs::File;
 use std::sync::LazyLock;

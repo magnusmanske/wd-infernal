@@ -32,13 +32,13 @@ struct GoogleBooksEntry {
     #[serde(default)]
     dc_title: Vec<String>,
     #[serde(default)]
-    date: Vec<String>,
+    dc_date: Vec<String>,
     #[serde(default)]
-    format: Vec<String>,
+    dc_format: Vec<String>,
     #[serde(default)]
-    creator: Vec<String>,
+    dc_creator: Vec<String>,
     #[serde(default)]
-    language: Vec<String>,
+    dc_language: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -62,7 +62,7 @@ impl GoogleBooksFeed {
 
     pub(crate) fn parse_google_books_xml(isbn2wiki: &ISBN2wiki, xml: &str) -> Result<()> {
         let xml = xml.replace("<dc:", "<dc_").replace("</dc:", "</dc_"); // To avoid XML namespace problems with serde
-        let feed: GoogleBooksFeed = serde_xml_rs::from_str(&xml)?; // Does not work properly
+        let feed: GoogleBooksFeed = serde_xml_rs::from_str(&xml)?;
         let entry = feed
             .entry
             .first()
@@ -70,7 +70,7 @@ impl GoogleBooksFeed {
 
         let google_books_id = Self::extract_google_book_identifiers(isbn2wiki, entry)?;
 
-        if let Some(language) = entry.language.first() {
+        if let Some(language) = entry.dc_language.first() {
             isbn2wiki.add_reference(
                 "P1476",
                 DataValue::Monolingual {
@@ -81,7 +81,7 @@ impl GoogleBooksFeed {
             );
         }
 
-        for format in &entry.format {
+        for format in &entry.dc_format {
             if let Some(pages) = Self::capture1(&RE_PAGES, format)
                 .and_then(|s| s.parse::<i64>().ok())
             {
@@ -100,7 +100,7 @@ impl GoogleBooksFeed {
             }
         }
 
-        for date in &entry.date {
+        for date in &entry.dc_date {
             if let Some(year) = Self::capture1(&RE_YEAR, date) {
                 let time = format!("+{year}-01-01T00:00:00Z");
                 isbn2wiki.add_reference(
@@ -114,7 +114,7 @@ impl GoogleBooksFeed {
             }
         }
 
-        for creator in &entry.creator {
+        for creator in &entry.dc_creator {
             isbn2wiki.add_reference(
                 "P225",
                 DataValue::String(creator.to_owned()),
@@ -169,13 +169,6 @@ mod tests {
     use super::*;
     use crate::reference::DataValue;
 
-    // NOTE: serde-xml-rs does not correctly deserialise most `dc:*` fields from
-    // Google Books Atom feeds. The XML pre-processing replaces `<dc:foo>` with
-    // `<dc_foo>`, so only struct fields named `dc_*` (e.g. `dc_identifier`) are
-    // matched. Fields named without the prefix (`date`, `format`, `creator`,
-    // `language`) never receive data. Tests that cover this broken behaviour are
-    // marked `#[ignore]` so they document the known limitation without blocking CI.
-
     fn parsed_isbn2wiki() -> ISBN2wiki {
         let isbn2wiki = ISBN2wiki::new("9782267027006").unwrap();
         let xml = include_str!("../test_files/google_books.xml");
@@ -213,9 +206,7 @@ mod tests {
         );
     }
 
-    // serde-xml-rs does not match dc_title → P1476 is never populated
     #[test]
-    #[ignore = "serde-xml-rs does not deserialise dc_title; P1476 is never populated"]
     fn test_parse_google_books_xml_sets_p1476_title() {
         let isbn2wiki = parsed_isbn2wiki();
         let values = isbn2wiki.values.lock().unwrap();
@@ -230,9 +221,7 @@ mod tests {
         assert!(found, "P1476 should contain the book title from the XML");
     }
 
-    // serde-xml-rs does not match the `language` field (would need `dc_language`)
     #[test]
-    #[ignore = "serde-xml-rs does not deserialise dc_language; language is never populated"]
     fn test_parse_google_books_xml_sets_p1476_language() {
         let isbn2wiki = parsed_isbn2wiki();
         let values = isbn2wiki.values.lock().unwrap();
@@ -243,9 +232,7 @@ mod tests {
         assert!(found, "P1476 monolingual text should have language 'fr'");
     }
 
-    // serde-xml-rs does not match the `format` field (would need `dc_format`)
     #[test]
-    #[ignore = "serde-xml-rs does not deserialise dc_format; page count is never populated"]
     fn test_parse_google_books_xml_sets_p1104_page_count() {
         let isbn2wiki = parsed_isbn2wiki();
         let values = isbn2wiki.values.lock().unwrap();
@@ -260,9 +247,7 @@ mod tests {
         assert!(found, "P1104 should be 511 from the test XML");
     }
 
-    // serde-xml-rs does not match the `format` field (would need `dc_format`)
     #[test]
-    #[ignore = "serde-xml-rs does not deserialise dc_format; P31=Q571 is never populated"]
     fn test_parse_google_books_xml_sets_p31_book() {
         let isbn2wiki = parsed_isbn2wiki();
         let values = isbn2wiki.values.lock().unwrap();
@@ -277,9 +262,7 @@ mod tests {
         assert!(found, "P31 should be Q571 (book) when format is 'book'");
     }
 
-    // serde-xml-rs does not match the `date` field (would need `dc_date`)
     #[test]
-    #[ignore = "serde-xml-rs does not deserialise dc_date; publication date is never populated"]
     fn test_parse_google_books_xml_sets_p577_publication_date() {
         let isbn2wiki = parsed_isbn2wiki();
         let values = isbn2wiki.values.lock().unwrap();
@@ -294,9 +277,7 @@ mod tests {
         assert!(found, "P577 should contain a date with year 2014");
     }
 
-    // serde-xml-rs does not match the `creator` field (would need `dc_creator`)
     #[test]
-    #[ignore = "serde-xml-rs does not deserialise dc_creator; author name is never populated"]
     fn test_parse_google_books_xml_sets_creator() {
         let isbn2wiki = parsed_isbn2wiki();
         let values = isbn2wiki.values.lock().unwrap();
