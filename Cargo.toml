@@ -33,12 +33,9 @@ urlencoding = "2"
 anyhow = "1"
 goodreads-metadata-scraper = "0.2"
 isbn = "0.8"
-# lingua = "*"
-# whatlang = "*"
 wikibase_rest_api = "0.1"
-wikimisc = { git = "https://github.com/magnusmanske/wikimisc.git" , features = ["database","site-matrix"] }
+wikimisc = { version = "*", features = ["database","site-matrix"] }
 tools_interface = "0.1"
-# toolforge = { version = "*", features = ["wikipool"] }
 
 [profile.release]
 opt-level = 3
