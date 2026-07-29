@@ -2,7 +2,7 @@ use crate::TOOLFORGE_DB;
 use crate::initial_search::InitialSearch;
 use crate::isbn::ISBN2wiki;
 use crate::person::Person;
-use crate::referee::Referee;
+
 use crate::{crosscats::CrossCats, location::Location};
 use axum::extract::Query;
 use axum::http::header::{CACHE_CONTROL, HeaderValue};
@@ -322,18 +322,15 @@ async fn viaf_search(Path(query): Path<String>) -> Result<impl IntoResponse, Sta
 )]
 async fn referee(Path(item): Path<String>) -> Result<impl IntoResponse, StatusCode> {
     tracing::info!("referee: {item}");
-    let results = Referee::new()
-        .await
-        .map_err(|e| {
-            tracing::error!("referee::new() failed: {e}");
-            StatusCode::NOT_FOUND
-        })?
-        .get_potential_references(&item)
-        .await
-        .map_err(|e| {
-            tracing::warn!("referee get_potential_references failed for {item}: {e}");
-            StatusCode::NOT_FOUND
-        })?;
+    let referee = crate::referee::REFEREE.get().ok_or_else(|| {
+        tracing::error!("referee not initialized");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let mut referee = referee.lock().await;
+    let results = referee.get_potential_references(&item).await.map_err(|e| {
+        tracing::warn!("referee get_potential_references failed for {item}: {e}");
+        StatusCode::NOT_FOUND
+    })?;
     Ok(Json(results))
 }
 
@@ -374,6 +371,11 @@ impl Server {
     #![allow(clippy::print_stdout)]
     pub async fn start() -> Result<(), Box<dyn std::error::Error>> {
         tracing_subscriber::fmt::init();
+
+        // Initialize the shared Referee (fetches siteinfo from Wikidata) before accepting requests.
+        tracing::info!("initializing Referee...");
+        crate::referee::init_referee().await?;
+        tracing::info!("Referee initialized");
 
         let cors = CorsLayer::new()
             .allow_origin(AllowOrigin::predicate(

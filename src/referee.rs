@@ -12,6 +12,7 @@ use std::{
     net::{IpAddr, ToSocketAddrs},
     sync::LazyLock,
 };
+use tokio::sync::Mutex;
 use wikibase::{
     DataValueType, Entity, EntityTrait, Snak, SnakDataType, Statement,
     entity_container::EntityContainer, mediawiki::Api,
@@ -247,6 +248,20 @@ pub struct Referee {
     api: Api,
     entities: EntityContainer,
     client: Client,
+}
+
+/// A globally shared `Referee` instance, initialized once at startup.
+/// Avoids calling `Api::new()` (which fetches siteinfo from Wikidata) on every request.
+pub static REFEREE: std::sync::OnceLock<Mutex<Referee>> = std::sync::OnceLock::new();
+
+/// Initialize the shared `Referee` singleton.
+/// Should be called once at server startup.
+pub async fn init_referee() -> Result<()> {
+    let referee = Referee::new().await?;
+    REFEREE
+        .set(Mutex::new(referee))
+        .map_err(|_| anyhow::anyhow!("Referee already initialized"))?;
+    Ok(())
 }
 
 impl Referee {
