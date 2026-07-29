@@ -19,6 +19,8 @@ static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(|| {
         .user_agent(
             "WikidataInfernal/0.1 (https://wd-infernal.toolforge.org/; mailto:magnusmanske@toolforge.org)",
         )
+        .timeout(std::time::Duration::from_secs(30))
+        .connect_timeout(std::time::Duration::from_secs(10))
         .build()
         .expect("Failed to build Google Books HTTP client")
 });
@@ -82,8 +84,8 @@ impl GoogleBooksFeed {
         }
 
         for format in &entry.dc_format {
-            if let Some(pages) = Self::capture1(&RE_PAGES, format)
-                .and_then(|s| s.parse::<i64>().ok())
+            if let Some(pages) =
+                Self::capture1(&RE_PAGES, format).and_then(|s| s.parse::<i64>().ok())
             {
                 isbn2wiki.add_reference(
                     "P1104",
@@ -142,14 +144,21 @@ impl GoogleBooksFeed {
             if let Some(isbn) = Self::capture1(&RE_ISBN_10, identifier) {
                 let formatted = format!(
                     "{}-{}-{}-{}",
-                    &isbn[0..1], &isbn[1..4], &isbn[4..9], &isbn[9..10]
+                    &isbn[0..1],
+                    &isbn[1..4],
+                    &isbn[4..9],
+                    &isbn[9..10]
                 );
                 isbn2wiki.add_reference("P957", DataValue::String(formatted), Reference::none());
             }
             if let Some(isbn) = Self::capture1(&RE_ISBN_13, identifier) {
                 let formatted = format!(
                     "{}-{}-{}-{}-{}",
-                    &isbn[0..3], &isbn[3..4], &isbn[4..6], &isbn[6..12], &isbn[12..13]
+                    &isbn[0..3],
+                    &isbn[3..4],
+                    &isbn[4..6],
+                    &isbn[6..12],
+                    &isbn[12..13]
                 );
                 isbn2wiki.add_reference("P212", DataValue::String(formatted), Reference::none());
             }
