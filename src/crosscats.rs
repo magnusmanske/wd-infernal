@@ -1,6 +1,5 @@
 use async_lazy::Lazy;
 use axum::http::StatusCode;
-use futures::StreamExt;
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -179,35 +178,40 @@ impl CrossCats {
         items: Vec<String>,
         item_info: &mut HashMap<String, ItemInfo>,
     ) -> Result<(), StatusCode> {
-        let item_entity_ids: Vec<EntityId> = items
-            .into_iter()
-            .filter_map(|id| EntityId::new(id).ok())
-            .filter(|eid| matches!(eid, EntityId::Item(_)))
-            .collect();
-        let fetches = item_entity_ids.into_iter().map(|eid| {
-            let api = REST_API.clone();
-            async move { Item::get(eid, &api).await }
-        });
-        let loaded_items: Vec<Item> = futures::stream::iter(fetches)
-            .buffer_unordered(5)
-            .filter_map(|res: Result<Item, RestApiError>| async move { res.ok() })
-            .collect()
-            .await;
+        let ids_str = items.join("|");
+        let api = Api::new("https://www.wikidata.org/w/api.php")
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let params: HashMap<String, String> = [
+            ("action".to_string(), "wbgetentities".to_string()),
+            ("ids".to_string(), ids_str),
+            ("props".to_string(), "sitelinks|claims".to_string()),
+            ("format".to_string(), "json".to_string()),
+        ]
+        .into();
+        let json = api
+            .get_query_api_json(&params)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let entities = &json["entities"];
 
-        for item in &loaded_items {
-            let q = match item.id().id() {
-                Ok(id) => id.to_string(),
-                Err(_) => continue,
-            };
-            let is_disambiguation = item.statements().property("P31").iter().any(|statement| {
-                matches!(statement.value(), StatementValue::Value(StatementValueContent::String(s)) if s == "Q4167410")
-            });
-            if is_disambiguation {
-                continue;
+        for (qid, entity) in entities.as_object().iter().flat_map(|o| o.iter()) {
+            // Skip disambiguation pages (P31 = Q4167410)
+            if let Some(claims) = entity["claims"]["P31"].as_array() {
+                let is_disambiguation = claims.iter().any(|claim| {
+                    claim["mainsnak"]["datavalue"]["value"]["id"]
+                        .as_str()
+                        .is_some_and(|id| id == "Q4167410")
+                });
+                if is_disambiguation {
+                    continue;
+                }
             }
-            if let Some(sitelink) = item.sitelinks().get_wiki(&target_wiki) {
-                if let Some(info) = item_info.get_mut(&q) {
-                    info.local_page = Some(sitelink.title().to_string());
+
+            // Extract sitelink for target wiki
+            if let Some(title) = entity["sitelinks"][&target_wiki]["title"].as_str() {
+                if let Some(info) = item_info.get_mut(qid) {
+                    info.local_page = Some(title.to_string());
                 }
             }
         }

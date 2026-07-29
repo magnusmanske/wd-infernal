@@ -17,7 +17,7 @@ static RE_ISBN_13: LazyLock<Regex> =
 static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(|| {
     Client::builder()
         .user_agent(
-            "Mozilla/5.0 (Windows; U; Windows NT 5.1; rv:1.7.3) Gecko/20041001 Firefox/0.10.1",
+            "WikidataInfernal/0.1 (https://wd-infernal.toolforge.org/; mailto:magnusmanske@toolforge.org)",
         )
         .build()
         .expect("Failed to build Google Books HTTP client")
@@ -62,7 +62,7 @@ impl GoogleBooksFeed {
 
     pub(crate) fn parse_google_books_xml(isbn2wiki: &ISBN2wiki, xml: &str) -> Result<()> {
         let xml = xml.replace("<dc:", "<dc_").replace("</dc:", "</dc_"); // To avoid XML namespace problems with serde
-        let feed: GoogleBooksFeed = serde_xml_rs::from_str(&xml)?;
+        let feed: GoogleBooksFeed = quick_xml::de::from_str(&xml)?;
         let entry = feed
             .entry
             .first()

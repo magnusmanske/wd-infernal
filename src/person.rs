@@ -174,9 +174,12 @@ impl Person {
         result
     }
 
-    /// Fetch name items for `tokens` directly from the Toolforge replicas:
-    /// one term-store query to find candidate items by label/alias, then one
-    /// Wikidata query to determine which name classes those items belong to.
+    /// Fetch name items for `tokens` directly from the Toolforge replicas.
+    /// Two sequential queries are needed because the term-store and the
+    /// Wikidata replica run on different MySQL servers (ports 3309 / 3317),
+    /// making a cross-server SQL JOIN impossible. The second query only
+    /// sends the Q-IDs discovered in the first round, so data transfer is
+    /// already minimised.
     async fn db_lookup(tokens: &[String]) -> anyhow::Result<NameHitMap> {
         // Step 1: term store — items whose label (type 1) or alias (type 3)
         // exactly equals one of the tokens.

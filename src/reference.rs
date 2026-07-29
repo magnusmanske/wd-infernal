@@ -63,6 +63,7 @@ impl Reference {
         }
     }
 
+    #[cfg(test)]
     fn _url(url: &str) -> Self {
         Reference {
             property: None,
@@ -342,7 +343,10 @@ mod tests {
         let has_p854 = group.parts().iter().any(|pv| pv.property().id() == "P854");
         assert!(has_p854, "URL reference group should contain P854");
         let has_p813 = group.parts().iter().any(|pv| pv.property().id() == "P813");
-        assert!(has_p813, "URL reference group should contain P813 (retrieved date)");
+        assert!(
+            has_p813,
+            "URL reference group should contain P813 (retrieved date)"
+        );
     }
 
     #[test]
@@ -355,7 +359,9 @@ mod tests {
     #[test]
     fn test_reference_url_not_equivalent_to_different_url() {
         let r = Reference::_url("https://example.com/page");
-        let other_group = Reference::_url("https://other.com/page").as_ref_group().unwrap();
+        let other_group = Reference::_url("https://other.com/page")
+            .as_ref_group()
+            .unwrap();
         assert!(!r.is_equivalent(&other_group));
     }
 

@@ -62,7 +62,79 @@
 </head>
 
 <body>
-	<div class="container">%%RESULT%%</div>
+	    <div class="container">%%RESULT%%</div>
+    <script>
+        (function() {
+            var descEls = document.querySelectorAll('.desc[data-q]');
+            if (descEls.length === 0) return;
+
+            /* -- collect unique Q-IDs ----------------------------------- */
+            var qSet = {};
+            var qList = [];
+            descEls.forEach(function(el) {
+                var q = el.getAttribute('data-q');
+                if (q && !qSet[q]) {
+                    qSet[q] = true;
+                    qList.push(q);
+                }
+            });
+
+            /* -- batch into groups of 50 -------------------------------- */
+            var BATCH = 50;
+            var batches = [];
+            for (var i = 0; i < qList.length; i += BATCH) {
+                batches.push(qList.slice(i, i + BATCH));
+            }
+
+            /* -- populate a single .desc element pair ------------------- */
+            function populateDesc(q, wdDesc) {
+                var els = document.querySelectorAll('.desc[data-q="' + q + '"]');
+                els.forEach(function(el) {
+                    var wdEl = el.querySelector('.wd-desc');
+                    if (wdEl && !wdEl.textContent) wdEl.textContent = wdDesc || '';
+                });
+            }
+
+            /* -- concurrency-limited batch fetcher ---------------------- */
+            var MAX_CONCURRENT = 3;
+            var idx = 0;
+
+            function fetchNext() {
+                if (idx >= batches.length) return;
+                var batch = batches[idx++];
+                var ids = batch.join('|');
+                var url = 'https://www.wikidata.org/w/api.php'
+                    + '?action=wbgetentities'
+                    + '&ids=' + encodeURIComponent(ids)
+                    + '&props=descriptions'
+                    + '&languages=en'
+                    + '&format=json'
+                    + '&origin=*';
+
+                fetch(url)
+                    .then(function(r) { return r.ok ? r.json() : Promise.reject(r.status); })
+                    .then(function(data) {
+                        if (data && data.entities) {
+                            batch.forEach(function(q) {
+                                var entity = data.entities[q];
+                                var desc = '';
+                                if (entity && entity.descriptions && entity.descriptions.en) {
+                                    desc = entity.descriptions.en.value;
+                                }
+                                populateDesc(q, desc);
+                            });
+                        }
+                    })
+                    .catch(function(e) {
+                        console.warn('wd-infernal: description fetch failed (' + ids + '):', e);
+                    })
+                    .finally(fetchNext);
+            }
+
+            /* -- kick off initial concurrent requests ------------------- */
+            for (var j = 0; j < MAX_CONCURRENT; j++) fetchNext();
+        })();
+    </script>
 </body>
 <script>
 	var wd = new WikiData();

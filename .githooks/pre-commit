@@ -1,0 +1,40 @@
+#!/bin/bash
+# pre-commit hook — detect committed credentials
+# Skip config.json.template (contains dummy placeholders, not real secrets)
+
+files=$(git diff --cached --name-only --diff-filter=ACM)
+
+has_creds=0
+
+for f in $files; do
+    # Skip the template file — it has dummy "TOOL_USER:TOOL_USER_PASSWORD" placeholders
+    if [[ "$f" == "config.json.template" ]]; then
+        continue
+    fi
+
+    # Skip binary / non-text files
+    if ! git diff --cached -- "$f" | file - 2>/dev/null | grep -q text; then
+        continue
+    fi
+
+    # Check for added lines containing credential-like patterns
+    added=$(git diff --cached -U0 -- "$f" | grep '^+' | grep -v '^+++')
+    if echo "$added" | grep -qiP '(password|passwd|secret|token|api_key|apikey)\s*[:=]\s*["'"'"']?[A-Za-z0-9_\-!@#$%^&*()+=]{8,}' 2>/dev/null; then
+        echo "ERROR: Potential credential detected in $f"
+        echo "  Found a pattern matching password/secret/token/key assignment."
+        echo "  If this is a false positive, use 'git commit --no-verify' to bypass."
+        has_creds=1
+    fi
+
+    # Also check for long base64-like strings (common for tokens)
+    if echo "$added" | grep -qiP '[A-Za-z0-9+/]{40,}={0,2}' 2>/dev/null; then
+        echo "ERROR: Potential base64 token detected in $f"
+        has_creds=1
+    fi
+done
+
+if [ $has_creds -eq 1 ]; then
+    exit 1
+fi
+
+exit 0

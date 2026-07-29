@@ -58,6 +58,7 @@ pub mod location;
 pub mod person;
 pub mod referee;
 pub mod reference;
+pub mod metrics;
 pub mod server;
 pub mod viaf;
 pub mod wikidata;

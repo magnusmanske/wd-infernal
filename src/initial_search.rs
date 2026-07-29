@@ -15,7 +15,7 @@ impl InitialSearch {
         let query = query.trim();
         let candidate_items = Self::get_candidate_items_from_term_store(query).await?;
         let futures = candidate_items
-            .chunks(5000)
+            .chunks(500)
             .map(Self::filter_chunk)
             .collect::<Vec<_>>();
         let results = futures::future::try_join_all(futures)
