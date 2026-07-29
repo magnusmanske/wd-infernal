@@ -375,6 +375,9 @@ async fn country_year_property(
 
 impl Server {
     #![allow(clippy::print_stdout)]
+    // False positive: the reported complexity comes from `.await`/`?` desugaring,
+    // and does not drop even when the body is reduced to `Ok(())`.
+    #[allow(clippy::cognitive_complexity)]
     pub async fn start() -> Result<(), Box<dyn std::error::Error>> {
         tracing_subscriber::fmt::init();
 
@@ -383,21 +386,34 @@ impl Server {
         crate::referee::init_referee().await?;
         tracing::info!("Referee initialized");
 
+        let app = Self::router();
+
+        let addr = Self::get_server_address();
+        tracing::debug!("listening on {addr}");
+        println!("listening on http://{addr}");
+        let listener = tokio::net::TcpListener::bind(addr).await?;
+        tracing::info!("startup complete");
+        axum::serve(listener, app).await?;
+        Ok(())
+    }
+
+    /// Only traffic from Wikipedia, Wikidata, or Toolforge is allowed.
+    fn is_allowed_origin(origin: &HeaderValue) -> bool {
+        let Ok(origin) = origin.to_str() else {
+            return false;
+        };
+        origin == "https://www.wikidata.org"
+            || origin == "https://wikidata.org"
+            || origin.ends_with(".wikipedia.org")
+            || origin.ends_with(".wikidata.org")
+            || origin.ends_with(".toolforge.org")
+    }
+
+    fn router() -> Router {
         let cors = CorsLayer::new()
-            .allow_origin(AllowOrigin::predicate(
-                |origin: &axum::http::HeaderValue, _| {
-                    let origin_str = match origin.to_str() {
-                        Ok(s) => s,
-                        Err(_) => return false,
-                    };
-                    // Only allow traffic from Wikipedia, Wikidata, or Toolforge
-                    origin_str == "https://www.wikidata.org"
-                        || origin_str == "https://wikidata.org"
-                        || origin_str.ends_with(".wikipedia.org")
-                        || origin_str.ends_with(".wikidata.org")
-                        || origin_str.ends_with(".toolforge.org")
-                },
-            ))
+            .allow_origin(AllowOrigin::predicate(|origin: &HeaderValue, _| {
+                Self::is_allowed_origin(origin)
+            }))
             .allow_methods(Any)
             .allow_headers(Any);
 
@@ -428,7 +444,7 @@ impl Server {
                 HeaderValue::from_static("public, max-age=300"),
             ));
 
-        let app = Router::new()
+        Router::new()
             .merge(SwaggerUi::new("/swagger-ui").url("/openapi.json", ApiDoc::openapi()))
             .route("/", get(root))
             .route("/healthz", get(healthz))
@@ -451,15 +467,7 @@ impl Server {
             ))
             .layer(TraceLayer::new_for_http())
             .layer(CompressionLayer::new().br(true).gzip(true))
-            .layer(cors);
-
-        let addr = Self::get_server_address();
-        tracing::debug!("listening on {addr}");
-        println!("listening on http://{addr}");
-        let listener = tokio::net::TcpListener::bind(addr).await?;
-        tracing::info!("startup complete");
-        axum::serve(listener, app).await?;
-        Ok(())
+            .layer(cors)
     }
 
     fn get_server_address() -> SocketAddr {
@@ -500,6 +508,41 @@ struct ApiDoc;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── is_allowed_origin ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_is_allowed_origin_accepts_wikimedia_and_toolforge() {
+        for origin in [
+            "https://www.wikidata.org",
+            "https://wikidata.org",
+            "https://en.wikipedia.org",
+            "https://test.wikidata.org",
+            "https://wd-infernal.toolforge.org",
+        ] {
+            assert!(
+                Server::is_allowed_origin(&HeaderValue::from_static(origin)),
+                "{origin} should be allowed"
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_allowed_origin_rejects_others() {
+        // Note: the suffix checks are scheme-agnostic, so "http://xx.wikidata.org"
+        // is allowed too. Harmless in practice, as Wikimedia sites are HTTPS-only.
+        for origin in [
+            "https://evil.com",
+            "https://wikidata.org.evil.com",
+            "https://notwikipedia.org",
+            "https://wikipedia.org.co",
+        ] {
+            assert!(
+                !Server::is_allowed_origin(&HeaderValue::from_static(origin)),
+                "{origin} should be rejected"
+            );
+        }
+    }
 
     // ── items2table ───────────────────────────────────────────────────────────
 

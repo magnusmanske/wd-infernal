@@ -111,7 +111,7 @@ const BAD_URLS: &[&str] = &[
 
 /// Returns `true` if the IP address is in a private, loopback, link-local,
 /// or otherwise non-routable range that should never be fetched by the server.
-fn is_private_ip(ip: &IpAddr) -> bool {
+const fn is_private_ip(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
             let octets = v4.octets();
@@ -271,6 +271,10 @@ const MAX_CONCURRENT_ENTITY_BATCHES: usize = 4;
 /// The shared entity cache is dropped once it holds more than this many entities,
 /// so a long-running process does not grow without bound.
 const MAX_CACHED_ENTITIES: usize = 5000;
+
+/// Deadline for one `get_potential_references` run. Deliberately below the
+/// server's request timeout, so the caller gets a real error rather than a 408.
+const OPERATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
 
 #[derive(Debug)]
 pub struct Referee {
@@ -1024,7 +1028,19 @@ impl Referee {
         Ok(true)
     }
 
+    /// Hard deadline for a single referee run.
+    ///
+    /// Necessary because `mediawiki` 0.3 retries HTTP 429 in an unbounded loop:
+    /// when the Wikimedia edge throttles us it answers `Retry-After: 100`, and the
+    /// crate then sleeps and re-sends forever, so no client timeout ever fires and
+    /// the request hangs indefinitely. Fail with a clear error instead.
     pub async fn get_potential_references(&self, entity: &str) -> Result<Vec<ConciseUrlCandidate>> {
+        tokio::time::timeout(OPERATION_TIMEOUT, self.potential_references(entity))
+            .await
+            .map_err(|_| anyhow!("referee timed out after {OPERATION_TIMEOUT:?} for {entity}"))?
+    }
+
+    async fn potential_references(&self, entity: &str) -> Result<Vec<ConciseUrlCandidate>> {
         let entity = entity.trim().to_uppercase();
 
         // The entity cache is shared by every request and never expires, so drop it

@@ -51,7 +51,7 @@ fn class_bit(qid: &str) -> u8 {
     }
 }
 
-/// Internal result type from db_lookup / api_lookup — a `HashMap` is
+/// Internal result type from `db_lookup` / `api_lookup` — a `HashMap` is
 /// the natural return type before inserting into the shared cache.
 type NameHitMap = HashMap<String, Vec<NameHit>>;
 
@@ -176,7 +176,7 @@ impl Person {
 
     /// Fetch name items for `tokens` directly from the Toolforge replicas.
     /// Two sequential queries are needed because the term-store and the
-    /// Wikidata replica run on different MySQL servers (ports 3309 / 3317),
+    /// Wikidata replica run on different `MySQL` servers (ports 3309 / 3317),
     /// making a cross-server SQL JOIN impossible. The second query only
     /// sends the Q-IDs discovered in the first round, so data transfer is
     /// already minimised.
