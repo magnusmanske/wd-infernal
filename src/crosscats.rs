@@ -131,7 +131,10 @@ impl CrossCats {
         let host = parsed_url
             .host_str()
             .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-        let host_parts = host.split('.').collect::<Vec<&str>>();
+        let host_parts: Vec<&str> = host.split('.').collect();
+        if host_parts.len() < 2 {
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        }
         Ok((host_parts[0].to_string(), host_parts[1].to_string()))
     }
 

@@ -1,8 +1,9 @@
 use crate::wikidata::Wikidata;
 use anyhow::{Result, anyhow};
+use axum::http::StatusCode;
 use mediawiki::Api;
 use std::collections::HashMap;
-use tokio::sync::OnceCell;
+use std::sync::OnceLock;
 
 // Not in use now, might be useful for Person?
 
@@ -13,18 +14,16 @@ pub struct GivenNames {
 }
 
 impl GivenNames {
-    #![allow(clippy::missing_panics_doc)]
-    pub async fn get_static() -> &'static GivenNames {
-        static ONCE: OnceCell<GivenNames> = OnceCell::const_new();
-        let api = Wikidata::get_wikidata_api()
+    pub async fn get_static() -> Result<&'static GivenNames, StatusCode> {
+        static ONCE: OnceLock<GivenNames> = OnceLock::new();
+        if let Some(given_names) = ONCE.get() {
+            return Ok(given_names);
+        }
+        let api = Wikidata::get_wikidata_api().await?;
+        let given_names = GivenNames::new(&api)
             .await
-            .expect("Wikidata API not available");
-        ONCE.get_or_init(|| async move {
-            GivenNames::new(&api)
-                .await
-                .expect("Failed to fetch given names")
-        })
-        .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        Ok(ONCE.get_or_init(|| given_names))
     }
 
     pub fn is_male(&self, name: &str) -> bool {

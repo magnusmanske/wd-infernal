@@ -1093,7 +1093,8 @@ impl Referee {
         }
         let mut ret = vec![input.remove(0)];
         for current in input {
-            let last = ret.last_mut().unwrap(); //Safe
+            // SAFETY: `ret` is seeded with one element above and only grows.
+            let last = ret.last_mut().expect("ret is never empty after seeding");
             if current == *last {
                 last.texts.extend(current.texts);
             } else {
