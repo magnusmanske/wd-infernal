@@ -104,14 +104,12 @@ impl ISBN2wiki {
             .isbn()
             .ok_or_else(|| anyhow!("No ISBN found"))?
             .replace('-', "");
-        let metadata = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            MetadataRequestBuilder::default().with_isbn(&isbn).execute(),
-        )
-        .await
-        .map_err(|_| anyhow!("Goodreads request timed out"))?
-        .map_err(|_e| anyhow!("Failed to retrieve metadata"))?
-        .ok_or(anyhow!("No metadata found"))?;
+        let metadata = MetadataRequestBuilder::default()
+            .with_isbn(&isbn)
+            .execute()
+            .await
+            .map_err(|_e| anyhow!("Failed to retrieve metadata"))?
+            .ok_or(anyhow!("No metadata found"))?;
 
         let goodreads_thumbnail_url = match metadata.image_url {
             Some(url) => url,
