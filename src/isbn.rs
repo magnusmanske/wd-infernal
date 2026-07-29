@@ -201,15 +201,15 @@ impl ISBN2wiki {
     }
 
     pub fn add_reference(&self, property: &str, value: DataValue, reference: Reference) {
-        // TODO handle poisoned mutex, or just ignore? unlikely event, no real fallout
-        if let Ok(mut values) = self.values.lock() {
-            values
-                .entry(property.to_string())
-                .or_default()
-                .entry(value)
-                .or_default()
-                .insert(reference);
-        }
+        // Recover from mutex poisoning so data is not lost when a thread
+        // panics while holding the lock.
+        let mut values = self.values.lock().unwrap_or_else(|e| e.into_inner());
+        values
+            .entry(property.to_string())
+            .or_default()
+            .entry(value)
+            .or_default()
+            .insert(reference);
     }
 
     fn add_isbn_values_as_statements(&mut self) -> Option<()> {

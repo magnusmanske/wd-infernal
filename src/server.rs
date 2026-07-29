@@ -17,7 +17,7 @@ use serde_json::json;
 use std::net::SocketAddr;
 use tower_http::{
     compression::CompressionLayer,
-    cors::{Any, CorsLayer},
+    cors::{AllowOrigin, Any, CorsLayer},
     trace::TraceLayer,
 };
 use wikibase_rest_api::Patch;
@@ -36,7 +36,20 @@ impl Server {
         tracing_subscriber::fmt::init();
 
         let cors = CorsLayer::new()
-            .allow_origin(Any)
+            .allow_origin(AllowOrigin::predicate(
+                |origin: &axum::http::HeaderValue, _| {
+                    let origin_str = match origin.to_str() {
+                        Ok(s) => s,
+                        Err(_) => return false,
+                    };
+                    // Only allow traffic from Wikipedia, Wikidata, or Toolforge
+                    origin_str == "https://www.wikidata.org"
+                        || origin_str == "https://wikidata.org"
+                        || origin_str.ends_with(".wikipedia.org")
+                        || origin_str.ends_with(".wikidata.org")
+                        || origin_str.ends_with(".toolforge.org")
+                },
+            ))
             .allow_methods(Any)
             .allow_headers(Any);
 
@@ -113,12 +126,13 @@ impl Server {
         Path(query): Path<String>,
         params: Query<Format>,
     ) -> Result<impl IntoResponse, StatusCode> {
-        let ret = InitialSearch::run(&query)
-            .await
-            .map_err(|_e| StatusCode::BAD_REQUEST)?;
+        let ret = InitialSearch::run(&query).await.map_err(|e| {
+            tracing::warn!("initial_search failed: {e}");
+            StatusCode::BAD_REQUEST
+        })?;
         match params.format.as_deref() {
             Some("html") => {
-                let escaped_query = query.replace('&', "&amp;").replace('"', "&quot;");
+                let escaped_query = html_escape::encode_text(&query);
                 let form = format!(
                     "<form id='search-form' class='mb-3'>\
                         <div class='input-group'>\
@@ -170,7 +184,10 @@ impl Server {
             .filter_map(|v| v.as_str().map(str::to_string))
             .collect();
         let cw = crate::change_wiki::ChangeWiki::new(&from, full_titles);
-        let results = cw.convert(&to).await.map_err(|_| StatusCode::NOT_FOUND)?;
+        let results = cw.convert(&to).await.map_err(|e| {
+            tracing::warn!("change_wiki conversion failed: {e}");
+            StatusCode::NOT_FOUND
+        })?;
         let results = json!(results);
         Ok(Json(results))
     }
@@ -183,29 +200,35 @@ impl Server {
     }
 
     async fn isbn_isbn(Path(isbn): Path<String>) -> Result<impl IntoResponse, StatusCode> {
-        let mut isbn2wiki = ISBN2wiki::new(&isbn).ok_or(StatusCode::NOT_FOUND)?;
-        isbn2wiki
-            .retrieve()
-            .await
-            .map_err(|_| StatusCode::NOT_FOUND)?;
-        let ret = isbn2wiki
-            .generate_item()
-            .map_err(|_| StatusCode::NOT_FOUND)?;
+        let mut isbn2wiki = ISBN2wiki::new(&isbn).ok_or_else(|| {
+            tracing::warn!("isbn_isbn: invalid ISBN {isbn}");
+            StatusCode::NOT_FOUND
+        })?;
+        isbn2wiki.retrieve().await.map_err(|e| {
+            tracing::warn!("isbn_isbn retrieve failed for {isbn}: {e}");
+            StatusCode::NOT_FOUND
+        })?;
+        let ret = isbn2wiki.generate_item().map_err(|e| {
+            tracing::warn!("isbn_isbn generate_item failed for {isbn}: {e}");
+            StatusCode::NOT_FOUND
+        })?;
         let ret = json!({"item": ret});
         Ok(Json(ret))
     }
 
     async fn isbn_item(Path(item): Path<String>) -> Result<impl IntoResponse, StatusCode> {
-        let mut isbn2wiki = ISBN2wiki::new_from_item(&item)
-            .await
-            .ok_or(StatusCode::NOT_FOUND)?;
-        isbn2wiki
-            .retrieve()
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        let patch = isbn2wiki
-            .generate_patch(&item)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let mut isbn2wiki = ISBN2wiki::new_from_item(&item).await.ok_or_else(|| {
+            tracing::warn!("isbn_item: invalid item {item}");
+            StatusCode::NOT_FOUND
+        })?;
+        isbn2wiki.retrieve().await.map_err(|e| {
+            tracing::error!("isbn_item retrieve failed for {item}: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+        let patch = isbn2wiki.generate_patch(&item).map_err(|e| {
+            tracing::error!("isbn_item generate_patch failed for {item}: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
         let ret = patch.patch().to_owned();
         Ok(Json(ret))
     }
@@ -213,17 +236,26 @@ impl Server {
     async fn viaf_search(Path(query): Path<String>) -> Result<impl IntoResponse, StatusCode> {
         let results = crate::viaf::search_viaf_for_local_names(&query)
             .await
-            .map_err(|_| StatusCode::NOT_FOUND)?;
+            .map_err(|e| {
+                tracing::warn!("viaf_search failed for {query}: {e}");
+                StatusCode::NOT_FOUND
+            })?;
         Ok(Json(results))
     }
 
     async fn referee(Path(item): Path<String>) -> Result<impl IntoResponse, StatusCode> {
         let results = Referee::new()
             .await
-            .map_err(|_| StatusCode::NOT_FOUND)?
+            .map_err(|e| {
+                tracing::error!("referee::new() failed: {e}");
+                StatusCode::NOT_FOUND
+            })?
             .get_potential_references(&item)
             .await
-            .map_err(|_| StatusCode::NOT_FOUND)?;
+            .map_err(|e| {
+                tracing::warn!("referee get_potential_references failed for {item}: {e}");
+                StatusCode::NOT_FOUND
+            })?;
         Ok(Json(results))
     }
 

@@ -3,9 +3,10 @@ use crate::wikidata::Wikidata;
 use axum::http::StatusCode;
 use futures::future::join_all;
 use mediawiki::Api;
+use moka::sync::Cache as MokaCache;
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
-use tokio::sync::RwLock;
+use std::time::Duration;
 use wikibase::{Reference, Snak, Statement};
 use wikimisc::mysql_async::{from_row, prelude::Queryable};
 
@@ -50,10 +51,20 @@ fn class_bit(qid: &str) -> u8 {
     }
 }
 
+/// Internal result type from db_lookup / api_lookup — a `HashMap` is
+/// the natural return type before inserting into the shared cache.
+type NameHitMap = HashMap<String, Vec<NameHit>>;
+
 /// Process-wide cache mapping a name token (as queried) to its matched items.
 /// This avoids re-querying the database for names seen in earlier requests.
-type NameHitCache = HashMap<String, Vec<NameHit>>;
-static NAME_CACHE: LazyLock<RwLock<NameHitCache>> = LazyLock::new(|| RwLock::new(HashMap::new()));
+/// Uses moka for TTL-based eviction and a size cap.
+type NameHitCache = MokaCache<String, Vec<NameHit>>;
+static NAME_CACHE: LazyLock<NameHitCache> = LazyLock::new(|| {
+    MokaCache::builder()
+        .max_capacity(10_000)
+        .time_to_live(Duration::from_secs(3600))
+        .build()
+});
 
 /// Nobiliary particles / surname prefixes (German "von", Dutch "van der",
 /// French/Spanish "de la", Italian "di"/"della", Arabic "al"/"bin", Celtic
@@ -66,8 +77,8 @@ static SURNAME_PARTICLES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
         // Dutch / Flemish (tussenvoegsel)
         "van", "ter", "ten", "te", "op", "'t", // French
         "de", "du", "des", "la", "le", "les", "d'", // Italian
-        "di", "da", "del", "dello", "della", "dei", "degli", "delle", "dal", "dalla", "dalle", "lo",
-        "li", "de'", // Spanish / Portuguese / Galician
+        "di", "da", "del", "dello", "della", "dei", "degli", "delle", "dal", "dalla", "dalle",
+        "lo", "li", "de'", // Spanish / Portuguese / Galician
         "las", "los", "do", "dos", "das", // Arabic / Persian
         "al", "el", "bin", "ben", "ibn", "abu", "abd", "bint", "abdel", "abdul",
         // Hebrew
@@ -127,17 +138,14 @@ impl Person {
     /// items. Results are served from (and stored in) the process cache; cache
     /// misses are fetched from the Toolforge DB, falling back to the Wikidata
     /// API when no DB connection is available.
-    async fn gather_hits(tokens: &[&str]) -> NameHitCache {
-        let mut result: NameHitCache = HashMap::new();
+    async fn gather_hits(tokens: &[&str]) -> NameHitMap {
+        let mut result: HashMap<String, Vec<NameHit>> = HashMap::new();
         let mut misses: Vec<String> = vec![];
-        {
-            let cache = NAME_CACHE.read().await;
-            for &token in tokens {
-                if let Some(hits) = cache.get(token) {
-                    result.insert(token.to_string(), hits.clone());
-                } else if !misses.iter().any(|m| m == token) {
-                    misses.push(token.to_string());
-                }
+        for &token in tokens {
+            if let Some(hits) = NAME_CACHE.get(token) {
+                result.insert(token.to_string(), hits.clone());
+            } else if !misses.iter().any(|m| m == token) {
+                misses.push(token.to_string());
             }
         }
         if misses.is_empty() {
@@ -156,20 +164,12 @@ impl Person {
             }
         };
 
-        if allow_cache {
-            let mut cache = NAME_CACHE.write().await;
-            for token in &misses {
-                let hits = fetched.get(token).cloned().unwrap_or_default();
-                cache.insert(token.clone(), hits.clone());
-                result.insert(token.clone(), hits);
+        for token in &misses {
+            let hits = fetched.get(token).cloned().unwrap_or_default();
+            if allow_cache {
+                NAME_CACHE.insert(token.clone(), hits.clone());
             }
-        } else {
-            for token in &misses {
-                result.insert(
-                    token.clone(),
-                    fetched.get(token).cloned().unwrap_or_default(),
-                );
-            }
+            result.insert(token.clone(), hits);
         }
         result
     }
@@ -177,7 +177,7 @@ impl Person {
     /// Fetch name items for `tokens` directly from the Toolforge replicas:
     /// one term-store query to find candidate items by label/alias, then one
     /// Wikidata query to determine which name classes those items belong to.
-    async fn db_lookup(tokens: &[String]) -> anyhow::Result<NameHitCache> {
+    async fn db_lookup(tokens: &[String]) -> anyhow::Result<NameHitMap> {
         // Step 1: term store — items whose label (type 1) or alias (type 3)
         // exactly equals one of the tokens.
         let placeholders: String = std::iter::repeat_n("?", tokens.len())
@@ -238,7 +238,7 @@ impl Person {
         }
 
         // Assemble hits per token, keeping only items that are actually names.
-        let mut out: NameHitCache = HashMap::new();
+        let mut out: NameHitMap = HashMap::new();
         for (text, item_id, type_id) in rows {
             let qid = format!("Q{item_id}");
             let classes = match qid_classes.get(&qid) {
@@ -264,7 +264,7 @@ impl Person {
 
     /// Fallback lookup via the Wikidata API/SPARQL, used when no DB connection
     /// is available. One search per class per token, run concurrently.
-    async fn api_lookup(tokens: &[String]) -> NameHitCache {
+    async fn api_lookup(tokens: &[String]) -> NameHitMap {
         let api = match Wikidata::get_wikidata_api().await {
             Ok(api) => api,
             Err(_) => return HashMap::new(),
@@ -314,7 +314,7 @@ impl Person {
         first_names: &[&str],
         surname_full: &str,
         surname_core: &str,
-        lookup: &NameHitCache,
+        lookup: &NameHitMap,
     ) -> Vec<Statement> {
         let empty: Vec<NameHit> = Vec::new();
         let get = |token: &str| lookup.get(token).unwrap_or(&empty).as_slice();

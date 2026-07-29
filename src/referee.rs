@@ -9,6 +9,7 @@ use serde_json::Value;
 use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet},
+    net::{IpAddr, ToSocketAddrs},
     sync::LazyLock,
 };
 use wikibase::{
@@ -95,7 +96,9 @@ const UNSUPPORTED_ENTITY_MARKERS: &[(&str, &str)] = &[
 // Do not create references for these properties
 const NO_REFS_FOR_PROPERTIES: &[&str] = &["P225", "P373", "P973", "P1472", "P1889"];
 
-// URLs containing any of these patterns will not be loaded
+// URLs containing any of these patterns will be blocked in addition to
+// the SSRF IP-allow-list. These are domains that should never be fetched
+// in the referee context regardless of resolution.
 const BAD_URLS: &[&str] = &[
     "://g.co/",
     "viaf.org/",
@@ -103,6 +106,43 @@ const BAD_URLS: &[&str] = &[
     "www.google.com",
     "toolforge.org",
 ];
+
+/// Returns `true` if the IP address is in a private, loopback, link-local,
+/// or otherwise non-routable range that should never be fetched by the server.
+fn is_private_ip(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            let octets = v4.octets();
+            match octets {
+                [0, _, _, _] => true,                       // Current network
+                [10, _, _, _] => true,                      // Private 10.0.0.0/8
+                [127, _, _, _] => true,                     // Loopback 127.0.0.0/8
+                [169, 254, _, _] => true,                   // Link-local 169.254.0.0/16
+                [172, b, _, _] if (b & 0xF0) == 16 => true, // 172.16.0.0/12
+                [192, 168, _, _] => true,                   // Private 192.168.0.0/16
+                [100, b, _, _] if (b & 0xC0) == 64 => true, // CGNAT 100.64.0.0/10
+                _ => false,
+            }
+        }
+        IpAddr::V6(v6) => {
+            let segments = v6.segments();
+            // ::1 loopback
+            let is_loopback = segments[0] == 0
+                && segments[1] == 0
+                && segments[2] == 0
+                && segments[3] == 0
+                && segments[4] == 0
+                && segments[5] == 0
+                && segments[6] == 0
+                && segments[7] == 1;
+            // fc00::/7 unique-local
+            let is_unique_local = (segments[0] & 0xFE00) == 0xFC00;
+            // fe80::/10 link-local
+            let is_link_local = (segments[0] & 0xFFC0) == 0xFE80;
+            is_loopback || is_unique_local || is_link_local
+        }
+    }
+}
 
 // URLs with these parts for statements with these properties will not be loaded
 const BAD_PROP_STATEMENT: &[(&str, &str)] = &[
@@ -226,11 +266,41 @@ impl Referee {
     }
 
     fn validate_url(url: &str) -> Result<()> {
+        // Domain-level blocklist — reject known-bad domains regardless of IP.
         for bad_url in BAD_URLS {
             if url.contains(bad_url) {
-                return Err(anyhow!("Bad URL"));
+                return Err(anyhow!("URL matches blocklist pattern"));
             }
         }
+
+        // Only allow https:// URLs
+        let parsed = url::Url::parse(url).map_err(|e| anyhow!("Invalid URL: {e}"))?;
+        if parsed.scheme() != "https" {
+            return Err(anyhow!("Only https:// URLs are allowed"));
+        }
+
+        // Resolve hostname to IP addresses and reject private/reserved ranges.
+        // Uses the host:port format required by ToSocketAddrs (default port 443).
+        let host = parsed
+            .host_str()
+            .ok_or_else(|| anyhow!("URL has no host"))?;
+        let addr_str = if host.contains(':') {
+            // IPv6 literal, needs brackets for ToSocketAddrs
+            // url::Url already normalizes IPv6 with brackets, e.g. "[::1]"
+            format!("{host}:443")
+        } else {
+            format!("{host}:443")
+        };
+        let ips = addr_str
+            .to_socket_addrs()
+            .map_err(|e| anyhow!("DNS resolution failed: {e}"))?;
+
+        for addr in ips {
+            if is_private_ip(&addr.ip()) {
+                return Err(anyhow!("URL resolves to a private/reserved IP"));
+            }
+        }
+
         Ok(())
     }
 
@@ -505,7 +575,9 @@ impl Referee {
 
     async fn add_stated_in(&self, concise_urls: &mut HashMap<String, UrlCandidate>) -> Result<()> {
         // Ensure all used properties are loaded
-        let mut properties: Vec<String> = concise_urls.values().filter_map(|v| v.property.to_owned())
+        let mut properties: Vec<String> = concise_urls
+            .values()
+            .filter_map(|v| v.property.to_owned())
             .filter(|p| !self.entities.has_entity(p))
             .collect();
         properties.sort();
@@ -1077,13 +1149,28 @@ mod tests {
 
     #[test]
     fn test_validate_url_bad() {
-        // Each entry in BAD_URLS must be rejected
+        // Domain-level blocklist must be enforced
         assert!(Referee::validate_url("https://viaf.org/viaf/12345").is_err());
         assert!(Referee::validate_url("https://toolforge.org/tool/foo").is_err());
         assert!(Referee::validate_url("https://wmflabs.org/something").is_err());
         assert!(Referee::validate_url("https://www.google.com/search?q=foo").is_err());
-        // "://g.co/" pattern
         assert!(Referee::validate_url("https://g.co/maps/foo").is_err());
+
+        // Non-HTTPS schemes must be rejected
+        assert!(Referee::validate_url("http://example.com/page").is_err());
+        assert!(Referee::validate_url("ftp://example.com/").is_err());
+        assert!(Referee::validate_url("file:///etc/passwd").is_err());
+
+        // Private / loopback / reserved IP ranges must be rejected
+        assert!(Referee::validate_url("https://127.0.0.1/").is_err());
+        assert!(Referee::validate_url("https://10.0.0.1/").is_err());
+        assert!(Referee::validate_url("https://192.168.1.1/").is_err());
+        assert!(Referee::validate_url("https://169.254.169.254/").is_err());
+        assert!(Referee::validate_url("https://[::1]/").is_err());
+
+        // Malformed URLs must be rejected
+        assert!(Referee::validate_url("").is_err());
+        assert!(Referee::validate_url("not-a-url").is_err());
     }
 
     #[test]
@@ -1407,8 +1494,8 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_url_empty_string_is_ok() {
-        assert!(Referee::validate_url("").is_ok());
+    fn test_validate_url_empty_string_is_rejected() {
+        assert!(Referee::validate_url("").is_err());
     }
 
     #[test]
