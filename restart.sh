@@ -1,3 +1,2 @@
 #!/bin/bash
-toolforge webservice stop
-toolforge webservice buildservice start --mount=all --health-check-path '/healthz'
+toolforge webservice buildservice restart --mount=all --health-check-path '/healthz' --mem 2G --cpu 2
