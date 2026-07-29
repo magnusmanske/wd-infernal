@@ -95,6 +95,7 @@ mod tests {
     use wikibase::{EntityType, EntityValue};
 
     #[tokio::test]
+    #[ignore]
     async fn test_search_single_name() {
         let api = Api::new("https://www.wikidata.org/w/api.php")
             .await

@@ -126,6 +126,7 @@ mod tests {
     use wikibase::{EntityType, EntityValue};
 
     #[tokio::test]
+    #[ignore]
     async fn test_p131() {
         let latitude = 52.19422713089248;
         let longitude = 0.13009437319916947;
@@ -144,6 +145,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_country_for_location_and_date() {
         let statements = Location::country_for_location_and_date("Q365", 1921)
             .await

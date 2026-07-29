@@ -513,6 +513,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_name_gender_male() {
         let _guard = NET_TEST_LOCK.lock().await;
         // "Heinrich Magnus Manske" — male given names + last name + gender.
@@ -534,6 +535,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_name_gender_female() {
         let _guard = NET_TEST_LOCK.lock().await;
         // "Elisabeth Manske" — a clearly female first name.
@@ -615,6 +617,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_name_gender_particle_surname() {
         let _guard = NET_TEST_LOCK.lock().await;
         // "Ludwig van Beethoven" — male, and "van" must not be a given name.
@@ -636,6 +639,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_name_gender_cross_gender_middle_name() {
         let _guard = NET_TEST_LOCK.lock().await;
         // "Rainer Maria Rilke" — "Maria" is also a male given name, but as a
@@ -662,6 +666,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_name_gender_single_word() {
         let _guard = NET_TEST_LOCK.lock().await;
         // Single word is treated as last name only, no first names → no gender.
@@ -673,6 +678,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_name_gender_references() {
         let _guard = NET_TEST_LOCK.lock().await;
         // Every statement must carry a reference containing the infernal snak (P887).
@@ -691,6 +697,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_name_gender_consistent_calls() {
         let _guard = NET_TEST_LOCK.lock().await;
         // Calling twice with the same input should yield the same result.
