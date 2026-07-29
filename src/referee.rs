@@ -1,6 +1,7 @@
 use anyhow::{Result, anyhow};
 use futures::future::join_all;
 use futures::join;
+use futures::stream::{self, StreamExt};
 
 use regex::Regex;
 use reqwest::Client;
@@ -9,10 +10,10 @@ use serde_json::Value;
 use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet},
-    net::{IpAddr, ToSocketAddrs},
-    sync::LazyLock,
+    net::IpAddr,
+    sync::{Arc, LazyLock},
 };
-use tokio::sync::Mutex;
+use tokio::sync::Semaphore;
 use wikibase::{
     DataValueType, Entity, EntityTrait, Snak, SnakDataType, Statement,
     entity_container::EntityContainer, mediawiki::Api,
@@ -243,23 +244,53 @@ impl ConciseUrlCandidate {
     }
 }
 
+/// Upper bound on outbound page fetches in flight across the whole process.
+/// Without this, a single request can open one socket per candidate URL, which
+/// exhausts file descriptors and ephemeral ports and makes *all* outbound
+/// requests (including the Wikidata API) fail with "error sending request".
+const MAX_CONCURRENT_FETCHES: usize = 100;
+
+/// Upper bound on outbound page fetches in flight for a single request.
+const MAX_FETCHES_PER_REQUEST: usize = 10;
+
+/// Timeout for a single candidate page fetch. Together with the fetch limits
+/// below this keeps the worst case (`MAX_WIKI_EXTLINK_URLS` /
+/// `MAX_FETCHES_PER_REQUEST` batches, each timing out) inside the server's
+/// request timeout.
+const FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Maximum number of sitelinks whose external links are loaded.
+const MAX_WIKI_PAGES: usize = 25;
+
+/// Maximum number of external-link URLs harvested from wiki pages that get loaded.
+const MAX_WIKI_EXTLINK_URLS: usize = 80;
+
+/// Upper bound on concurrent `wbgetentities` batches per entity load.
+const MAX_CONCURRENT_ENTITY_BATCHES: usize = 4;
+
+/// The shared entity cache is dropped once it holds more than this many entities,
+/// so a long-running process does not grow without bound.
+const MAX_CACHED_ENTITIES: usize = 5000;
+
 #[derive(Debug)]
 pub struct Referee {
     api: Api,
     entities: EntityContainer,
     client: Client,
+    /// Process-wide limit on concurrent outbound page fetches.
+    fetch_limit: Semaphore,
 }
 
 /// A globally shared `Referee` instance, initialized once at startup.
 /// Avoids calling `Api::new()` (which fetches siteinfo from Wikidata) on every request.
-pub static REFEREE: std::sync::OnceLock<Mutex<Referee>> = std::sync::OnceLock::new();
+pub static REFEREE: std::sync::OnceLock<Arc<Referee>> = std::sync::OnceLock::new();
 
 /// Initialize the shared `Referee` singleton.
 /// Should be called once at server startup.
 pub async fn init_referee() -> Result<()> {
     let referee = Referee::new().await?;
     REFEREE
-        .set(Mutex::new(referee))
+        .set(Arc::new(referee))
         .map_err(|_| anyhow::anyhow!("Referee already initialized"))?;
     Ok(())
 }
@@ -270,17 +301,23 @@ impl Referee {
             .user_agent(
                 "Mozilla/5.0 (Windows; U; Windows NT 5.1; rv:1.7.3) Gecko/20041001 Firefox/0.10.1",
             )
-            .timeout(std::time::Duration::from_secs(10))
+            .timeout(FETCH_TIMEOUT)
+            .connect_timeout(std::time::Duration::from_secs(3))
+            .pool_max_idle_per_host(2)
             .build()?;
+
+        let mut entities = EntityContainer::new();
+        entities.set_max_concurrent(MAX_CONCURRENT_ENTITY_BATCHES);
 
         Ok(Self {
             api: Api::new("https://www.wikidata.org/w/api.php").await?,
-            entities: EntityContainer::new(),
+            entities,
             client,
+            fetch_limit: Semaphore::new(MAX_CONCURRENT_FETCHES),
         })
     }
 
-    fn validate_url(url: &str) -> Result<()> {
+    async fn validate_url(url: &str) -> Result<()> {
         // Domain-level blocklist — reject known-bad domains regardless of IP.
         for bad_url in BAD_URLS {
             if url.contains(bad_url) {
@@ -295,38 +332,34 @@ impl Referee {
         }
 
         // Resolve hostname to IP addresses and reject private/reserved ranges.
-        // Uses the host:port format required by ToSocketAddrs (default port 443).
+        // Must be the async resolver: the blocking `ToSocketAddrs` equivalent stalls
+        // a whole tokio worker thread per lookup, which starves the runtime.
+        // url::Url already normalizes IPv6 hosts with brackets, e.g. "[::1]",
+        // which is the form `lookup_host` needs; port 443 is arbitrary.
         let host = parsed
             .host_str()
             .ok_or_else(|| anyhow!("URL has no host"))?;
-        let addr_str = if host.contains(':') {
-            // IPv6 literal, needs brackets for ToSocketAddrs
-            // url::Url already normalizes IPv6 with brackets, e.g. "[::1]"
-            format!("{host}:443")
-        } else {
-            format!("{host}:443")
-        };
-        let ips = addr_str
-            .to_socket_addrs()
+        let mut ips = tokio::net::lookup_host(format!("{host}:443"))
+            .await
             .map_err(|e| anyhow!("DNS resolution failed: {e}"))?;
 
-        for addr in ips {
-            if is_private_ip(&addr.ip()) {
-                return Err(anyhow!("URL resolves to a private/reserved IP"));
-            }
+        if ips.any(|addr| is_private_ip(&addr.ip())) {
+            return Err(anyhow!("URL resolves to a private/reserved IP"));
         }
 
         Ok(())
     }
 
     async fn load_contents_from_url(&self, url: &str) -> Result<String> {
-        Self::validate_url(url)?;
+        Self::validate_url(url).await?;
         let url = url
             .replace("&amp;", "&")
             .trim()
             .to_string()
             .replace(" ", "%20");
 
+        // Held for the whole exchange, so the number of open sockets stays bounded.
+        let _permit = self.fetch_limit.acquire().await?;
         let response = self.client.get(&url).send().await?;
         let status = response.status();
 
@@ -353,7 +386,7 @@ impl Referee {
 
     // Statements methods
     async fn get_statements_needing_references(
-        &mut self,
+        &self,
         entity: &str,
     ) -> Result<Vec<EntityStatement>> {
         let mut ret = Vec::new();
@@ -471,32 +504,50 @@ impl Referee {
             wiki_page_to_load.push((wiki.to_string(), page.to_string(), url.to_string()));
         }
 
-        let mut futures2 = vec![];
-        for (_wiki, _page, url) in &wiki_page_to_load {
-            let future = self.load_json_from_url(url);
-            futures2.push(future);
+        if wiki_page_to_load.len() > MAX_WIKI_PAGES {
+            tracing::info!(
+                "referee {entity}: {} sitelinks, only loading external links for the first {MAX_WIKI_PAGES}",
+                wiki_page_to_load.len()
+            );
+            wiki_page_to_load.truncate(MAX_WIKI_PAGES);
         }
-        let wiki_pages: Vec<serde_json::Value> =
-            join_all(futures2).await.into_iter().flatten().collect();
+
+        let extlink_api_urls: Vec<String> = wiki_page_to_load
+            .iter()
+            .map(|(_wiki, _page, url)| url.to_owned())
+            .collect();
+        let wiki_pages: Vec<serde_json::Value> = stream::iter(extlink_api_urls)
+            .map(|url| async move { self.load_json_from_url(&url).await })
+            .buffer_unordered(MAX_FETCHES_PER_REQUEST)
+            .filter_map(|json| async move { json })
+            .collect()
+            .await;
 
         let mut futures3 = vec![];
         for json in &wiki_pages {
             let future = self.generate_url_candidates_for_wiki_page(json);
             futures3.push(future);
         }
-        let candidate_urls: Vec<String> = join_all(futures3).await.into_iter().flatten().collect();
+        let mut candidate_urls: Vec<String> =
+            join_all(futures3).await.into_iter().flatten().collect();
 
-        let mut futures = vec![];
-        for url in &candidate_urls {
-            let future = self.generate_url_candidate(url);
-            futures.push(future);
+        // Each sitelink can contribute up to 500 external links; loading all of them
+        // is what previously turned one request into thousands of concurrent fetches.
+        if candidate_urls.len() > MAX_WIKI_EXTLINK_URLS {
+            tracing::info!(
+                "referee {entity}: {} candidate URLs from wikis, only loading the first {MAX_WIKI_EXTLINK_URLS}",
+                candidate_urls.len()
+            );
+            candidate_urls.truncate(MAX_WIKI_EXTLINK_URLS);
         }
-        let url_candidates: HashMap<String, UrlCandidate> = join_all(futures)
-            .await
-            .into_iter()
-            .flatten()
+
+        let url_candidates: HashMap<String, UrlCandidate> = stream::iter(candidate_urls)
+            .map(|url| async move { self.generate_url_candidate(&url).await })
+            .buffer_unordered(MAX_FETCHES_PER_REQUEST)
+            .filter_map(|uc| async move { uc })
             .map(|uc| (uc.url.clone(), uc))
-            .collect();
+            .collect()
+            .await;
         url_candidates
     }
 
@@ -561,7 +612,7 @@ impl Referee {
         }
     }
 
-    async fn get_candidate_urls(&mut self, entity: &str) -> Result<UniqueUrlCandidates> {
+    async fn get_candidate_urls(&self, entity: &str) -> Result<UniqueUrlCandidates> {
         self.entities.load_entity(&self.api, entity).await?;
         let has_no_claims = self
             .entities
@@ -683,12 +734,12 @@ impl Referee {
             let future = self.get_url_candidate_from_external_id(property, external_id, url);
             futures.push(future);
         }
-        let ret: UniqueUrlCandidates = join_all(futures)
-            .await
-            .into_iter()
-            .flatten()
+        let ret: UniqueUrlCandidates = stream::iter(futures)
+            .buffer_unordered(MAX_FETCHES_PER_REQUEST)
+            .filter_map(|uc| async move { uc })
             .map(|uc| (uc.url.to_string(), uc))
-            .collect();
+            .collect()
+            .await;
         ret
     }
 
@@ -747,8 +798,12 @@ impl Referee {
             let future = self.get_contents_from_url(website);
             futures.push(future);
         }
-        let ret: UniqueUrlCandidates = join_all(futures)
-            .await
+        // `buffered` (not `buffer_unordered`): results are zipped back onto `websites`.
+        let htmls: Vec<String> = stream::iter(futures)
+            .buffered(MAX_FETCHES_PER_REQUEST)
+            .collect()
+            .await;
+        let ret: UniqueUrlCandidates = htmls
             .into_iter()
             .zip(websites)
             .filter(|(html, _url)| !html.is_empty())
@@ -770,6 +825,27 @@ impl Referee {
             })
             .collect();
         ret
+    }
+
+    /// Batch-loads the entities used as statement values, so the per-statement
+    /// lookups in `get_statement_search_patterns` are cache hits.
+    /// Without this, an item with hundreds of entity-valued statements issues
+    /// hundreds of single-entity `wbgetentities` calls, all in flight at once.
+    async fn preload_statement_value_entities(&self, statements: &[EntityStatement]) -> Result<()> {
+        let mut entity_ids: Vec<String> = statements
+            .iter()
+            .filter(|statement| !NO_REFS_FOR_PROPERTIES.contains(&statement.property.as_str()))
+            .filter_map(|statement| {
+                match statement.claim.main_snak().data_value().as_ref()?.value() {
+                    wikibase::Value::Entity(ev) => Some(ev.id().to_string()),
+                    _ => None,
+                }
+            })
+            .collect();
+        entity_ids.sort();
+        entity_ids.dedup();
+        self.entities.load_entities(&self.api, &entity_ids).await?;
+        Ok(())
     }
 
     async fn get_statement_search_patterns(
@@ -931,7 +1007,7 @@ impl Referee {
         })
     }
 
-    async fn is_supported_entity(&mut self, entity: &str) -> Result<bool> {
+    async fn is_supported_entity(&self, entity: &str) -> Result<bool> {
         self.entities.load_entity(&self.api, entity).await?;
 
         let item = match self.entities.get_entity(entity) {
@@ -948,11 +1024,18 @@ impl Referee {
         Ok(true)
     }
 
-    pub async fn get_potential_references(
-        &mut self,
-        entity: &str,
-    ) -> Result<Vec<ConciseUrlCandidate>> {
+    pub async fn get_potential_references(&self, entity: &str) -> Result<Vec<ConciseUrlCandidate>> {
         let entity = entity.trim().to_uppercase();
+
+        // The entity cache is shared by every request and never expires, so drop it
+        // wholesale once it gets large rather than growing for the process lifetime.
+        if self.entities.len() > MAX_CACHED_ENTITIES {
+            tracing::info!(
+                "referee: clearing entity cache ({} entities)",
+                self.entities.len()
+            );
+            self.entities.clear();
+        }
 
         if !self.is_supported_entity(&entity).await? {
             return Ok(vec![]);
@@ -967,6 +1050,8 @@ impl Referee {
         if url_candidates.is_empty() {
             return Ok(vec![]);
         }
+
+        self.preload_statement_value_entities(&statements).await?;
 
         let mut futures = vec![];
         for statement in &statements {
@@ -1155,37 +1240,77 @@ mod tests {
         assert_eq!("en", Referee::guess_page_language_from_text("12345"));
     }
 
-    #[test]
-    fn test_validate_url_good() {
-        assert!(Referee::validate_url("https://example.com/page").is_ok());
-        assert!(Referee::validate_url("https://en.wikipedia.org/wiki/Foo").is_ok());
-        assert!(Referee::validate_url("https://www.example.org/data").is_ok());
+    #[tokio::test]
+    async fn test_validate_url_good() {
+        assert!(
+            Referee::validate_url("https://example.com/page")
+                .await
+                .is_ok()
+        );
+        assert!(
+            Referee::validate_url("https://en.wikipedia.org/wiki/Foo")
+                .await
+                .is_ok()
+        );
+        assert!(
+            Referee::validate_url("https://www.example.org/data")
+                .await
+                .is_ok()
+        );
     }
 
-    #[test]
-    fn test_validate_url_bad() {
+    #[tokio::test]
+    async fn test_validate_url_bad() {
         // Domain-level blocklist must be enforced
-        assert!(Referee::validate_url("https://viaf.org/viaf/12345").is_err());
-        assert!(Referee::validate_url("https://toolforge.org/tool/foo").is_err());
-        assert!(Referee::validate_url("https://wmflabs.org/something").is_err());
-        assert!(Referee::validate_url("https://www.google.com/search?q=foo").is_err());
-        assert!(Referee::validate_url("https://g.co/maps/foo").is_err());
+        assert!(
+            Referee::validate_url("https://viaf.org/viaf/12345")
+                .await
+                .is_err()
+        );
+        assert!(
+            Referee::validate_url("https://toolforge.org/tool/foo")
+                .await
+                .is_err()
+        );
+        assert!(
+            Referee::validate_url("https://wmflabs.org/something")
+                .await
+                .is_err()
+        );
+        assert!(
+            Referee::validate_url("https://www.google.com/search?q=foo")
+                .await
+                .is_err()
+        );
+        assert!(
+            Referee::validate_url("https://g.co/maps/foo")
+                .await
+                .is_err()
+        );
 
         // Non-HTTPS schemes must be rejected
-        assert!(Referee::validate_url("http://example.com/page").is_err());
-        assert!(Referee::validate_url("ftp://example.com/").is_err());
-        assert!(Referee::validate_url("file:///etc/passwd").is_err());
+        assert!(
+            Referee::validate_url("http://example.com/page")
+                .await
+                .is_err()
+        );
+        assert!(Referee::validate_url("ftp://example.com/").await.is_err());
+        assert!(Referee::validate_url("file:///etc/passwd").await.is_err());
 
         // Private / loopback / reserved IP ranges must be rejected
-        assert!(Referee::validate_url("https://127.0.0.1/").is_err());
-        assert!(Referee::validate_url("https://10.0.0.1/").is_err());
-        assert!(Referee::validate_url("https://192.168.1.1/").is_err());
-        assert!(Referee::validate_url("https://169.254.169.254/").is_err());
-        assert!(Referee::validate_url("https://[::1]/").is_err());
+        assert!(Referee::validate_url("https://127.0.0.1/").await.is_err());
+        assert!(Referee::validate_url("https://10.0.0.1/").await.is_err());
+        assert!(Referee::validate_url("https://192.168.1.1/").await.is_err());
+        assert!(
+            Referee::validate_url("https://169.254.169.254/")
+                .await
+                .is_err()
+        );
+        assert!(Referee::validate_url("https://[::1]/").await.is_err());
 
         // Malformed URLs must be rejected
-        assert!(Referee::validate_url("").is_err());
-        assert!(Referee::validate_url("not-a-url").is_err());
+        assert!(Referee::validate_url("").await.is_err());
+        assert!(Referee::validate_url("not-a-url").await.is_err());
     }
 
     #[test]
@@ -1508,9 +1633,9 @@ mod tests {
         assert!(result.contains("No body tag here"));
     }
 
-    #[test]
-    fn test_validate_url_empty_string_is_rejected() {
-        assert!(Referee::validate_url("").is_err());
+    #[tokio::test]
+    async fn test_validate_url_empty_string_is_rejected() {
+        assert!(Referee::validate_url("").await.is_err());
     }
 
     #[test]

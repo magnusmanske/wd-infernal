@@ -26,12 +26,17 @@ use tower_http::{
     compression::CompressionLayer,
     cors::{AllowOrigin, Any, CorsLayer},
     set_header::SetResponseHeaderLayer,
+    timeout::TimeoutLayer,
     trace::TraceLayer,
 };
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 use wikibase_rest_api::Patch;
 use wikimisc::mysql_async::prelude::Queryable;
+
+/// Hard upper bound on how long any single request may take before the
+/// connection is released with a 408.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Deserialize)]
 struct Format {
@@ -59,7 +64,10 @@ impl RateLimiter {
         }
     }
 
-    async fn check(&self) {
+    /// Records a request and returns `false` if it exceeds the limit.
+    /// Rejects rather than waits: making callers wait for a slot lets a burst
+    /// pile up an unbounded backlog of open connections.
+    async fn check(&self) -> bool {
         let mut state = self.state.lock().await;
         let now = Instant::now();
         let cutoff = now - self.window;
@@ -67,13 +75,10 @@ impl RateLimiter {
             state.pop_front();
         }
         if state.len() >= self.max_requests {
-            drop(state);
-            // Wait until the oldest request expires
-            tokio::time::sleep(self.window).await;
-            Box::pin(self.check()).await;
-        } else {
-            state.push_back(now);
+            return false;
         }
+        state.push_back(now);
+        true
     }
 }
 
@@ -82,7 +87,9 @@ async fn rate_limit_middleware(
     req: axum::extract::Request,
     next: middleware::Next,
 ) -> impl IntoResponse {
-    limiter.check().await;
+    if !limiter.check().await {
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
     next.run(req).await
 }
 
@@ -326,7 +333,6 @@ async fn referee(Path(item): Path<String>) -> Result<impl IntoResponse, StatusCo
         tracing::error!("referee not initialized");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    let mut referee = referee.lock().await;
     let results = referee.get_potential_references(&item).await.map_err(|e| {
         tracing::warn!("referee get_potential_references failed for {item}: {e}");
         StatusCode::NOT_FOUND
@@ -438,6 +444,11 @@ impl Server {
             .merge(rate_limited_cached)
             .merge(cached)
             .layer(middleware::from_fn(crate::metrics::middleware))
+            // Backstop: no request may occupy a connection indefinitely.
+            .layer(TimeoutLayer::with_status_code(
+                StatusCode::REQUEST_TIMEOUT,
+                REQUEST_TIMEOUT,
+            ))
             .layer(TraceLayer::new_for_http())
             .layer(CompressionLayer::new().br(true).gzip(true))
             .layer(cors);
