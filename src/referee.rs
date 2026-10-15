@@ -8,6 +8,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
+    cell::OnceCell,
     cmp::Ordering,
     collections::{HashMap, HashSet},
     net::IpAddr,
@@ -188,6 +189,54 @@ pub struct TextPart {
     before: String,
     regexp_match: String,
     after: String,
+}
+
+/// Room for the up to 60 characters of context on either side of a match
+/// (4 bytes each), plus one more, so a window edge never passes for a word boundary.
+const CONTEXT_WINDOW_BYTES: usize = 4 * 61;
+
+/// A statement value to look for in page texts.
+///
+/// The context regex alone is far too slow to scan whole pages: its leading
+/// `.{0,60}` defeats literal prefilters, and Unicode `\b` on non-ASCII text
+/// forces the slowest regex engine, so a large item took minutes of CPU. Hence a cheap regex
+/// finds the value, and the context regex only runs on a small window around it.
+#[derive(Debug)]
+struct SearchPattern {
+    pattern: String,
+    find: Regex,
+    /// Compiled on first hit, as most patterns never match.
+    context: OnceCell<Option<Regex>>,
+}
+
+impl SearchPattern {
+    fn new(pattern: &str) -> Option<Self> {
+        Some(Self {
+            pattern: pattern.to_string(),
+            find: Regex::new(&format!(r"\b(?:{pattern})\b")).ok()?,
+            context: OnceCell::new(),
+        })
+    }
+
+    /// The first occurrence in `text`, with up to 60 characters on either side.
+    fn first_match(&self, text: &str) -> Option<TextPart> {
+        let hit = self.find.find(text)?;
+        let context = self.context.get_or_init(|| {
+            let pattern = &self.pattern;
+            Regex::new(&format!(r"\b(.{{0,60}})\b({pattern})\b(.{{0,60}})\b")).ok()
+        });
+        let start = text.floor_char_boundary(hit.start().saturating_sub(CONTEXT_WINDOW_BYTES));
+        // Twice the room after the hit: the greedy leading context can skip
+        // ahead to a later occurrence up to 60 characters on.
+        let end = text.ceil_char_boundary(hit.end() + 2 * CONTEXT_WINDOW_BYTES);
+        let caps = context.as_ref()?.captures(&text[start..end])?;
+        let group = |i| caps.get(i).map_or("", |m| m.as_str()).to_string();
+        Some(TextPart {
+            before: group(1),
+            regexp_match: group(2),
+            after: group(3),
+        })
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1069,20 +1118,37 @@ impl Referee {
 
         self.preload_statement_value_entities(&statements).await?;
 
-        let mut futures = vec![];
-        for statement in &statements {
-            let future = self.process_statement(statement, &url_candidates);
-            futures.push(future);
-        }
-        let mut ret: Vec<ConciseUrlCandidate> = join_all(futures)
-            .await
-            .into_iter()
-            .filter_map(|r| r.ok())
-            .flatten()
-            // .filter(|r| r.property != Some("P973".to_string())) // Remove references for "described at URL"
+        let languages: HashSet<&str> = url_candidates
+            .values()
+            .map(|uc| uc.language.as_str())
             .collect();
-        ret.sort();
-        let ret = Self::merge_cuc_candidates(ret);
+        let mut jobs = Vec::with_capacity(statements.len());
+        for statement in statements {
+            let mut patterns = HashMap::new();
+            for &language in &languages {
+                // A failed lookup only costs this statement its matches.
+                let found = self
+                    .get_statement_search_patterns(&statement, language)
+                    .await
+                    .unwrap_or_default();
+                patterns.insert(language.to_string(), found);
+            }
+            jobs.push((statement, patterns));
+        }
+
+        // Matching every pattern against every page is CPU-bound. On the async
+        // runtime it starves all other requests, including the health check.
+        let ret = tokio::task::spawn_blocking(move || {
+            let mut ret: Vec<ConciseUrlCandidate> = jobs
+                .iter()
+                .flat_map(|(statement, patterns)| {
+                    Self::match_statement(statement, patterns, &url_candidates)
+                })
+                .collect();
+            ret.sort();
+            Self::merge_cuc_candidates(ret)
+        })
+        .await?;
 
         Ok(ret)
     }
@@ -1108,65 +1174,41 @@ impl Referee {
         ret
     }
 
-    async fn process_statement(
-        &self,
+    /// Where the statement's value, as given by its search `patterns` per
+    /// language, occurs in the texts of the URL candidates.
+    fn match_statement(
         statement: &EntityStatement,
-        url_candidates: &HashMap<String, UrlCandidate>,
-    ) -> Result<Vec<ConciseUrlCandidate>> {
-        let mut ret = Vec::new();
-        let statement_id = match statement.claim.id() {
-            Some(id) => id.to_owned(),
-            None => return Ok(ret),
+        patterns: &HashMap<String, Vec<String>>,
+        url_candidates: &UniqueUrlCandidates,
+    ) -> Vec<ConciseUrlCandidate> {
+        let Some(statement_id) = statement.claim.id() else {
+            return vec![];
         };
+        let search_patterns: HashMap<&str, Vec<SearchPattern>> = patterns
+            .iter()
+            .map(|(language, patterns)| {
+                let compiled = patterns
+                    .iter()
+                    .filter(|p| !p.trim().is_empty())
+                    .filter_map(|p| SearchPattern::new(p))
+                    .collect();
+                (language.as_str(), compiled)
+            })
+            .collect();
 
-        // Cache compiled regexes per language to avoid recompiling for each URL candidate
-        let mut regex_cache: HashMap<String, Vec<Regex>> = HashMap::new();
-
-        for url_candidate in url_candidates.values() {
-            if Self::does_statement_have_this_reference(statement, url_candidate) {
-                continue;
-            }
-
-            if Self::is_bad_combination(statement, url_candidate) {
-                continue;
-            }
-
-            let regexes = match regex_cache.get(&url_candidate.language) {
-                Some(cached) => cached,
-                None => {
-                    let patterns = self
-                        .get_statement_search_patterns(statement, &url_candidate.language)
-                        .await?;
-                    let compiled: Vec<Regex> = patterns
-                        .iter()
-                        .filter(|p| !p.trim().is_empty())
-                        .filter_map(|pattern| {
-                            let re_pattern = format!(r"\b(.{{0,60}})\b({pattern})\b(.{{0,60}})\b");
-                            Regex::new(&re_pattern).ok()
-                        })
-                        .collect();
-                    regex_cache
-                        .entry(url_candidate.language.clone())
-                        .or_insert(compiled)
-                }
-            };
-
-            for re in regexes {
-                if let Some(caps) = re.captures(&url_candidate.text) {
-                    let before = caps.get(1).map_or("", |m| m.as_str()).to_string();
-                    let matched = caps.get(2).map_or("", |m| m.as_str()).to_string();
-                    let after = caps.get(3).map_or("", |m| m.as_str()).to_string();
-
-                    let tp = TextPart {
-                        before,
-                        regexp_match: matched,
-                        after,
-                    };
-                    ret.push(ConciseUrlCandidate::new(&statement_id, url_candidate, &tp));
-                }
-            }
-        }
-        Ok(ret)
+        url_candidates
+            .values()
+            .filter(|uc| !Self::does_statement_have_this_reference(statement, uc))
+            .filter(|uc| !Self::is_bad_combination(statement, uc))
+            .flat_map(|uc| {
+                search_patterns
+                    .get(uc.language.as_str())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|sp| sp.first_match(&uc.text))
+                    .map(|tp| ConciseUrlCandidate::new(&statement_id, uc, &tp))
+            })
+            .collect()
     }
 
     fn get_date_patterns(language: &str, year: i32, month_num: u32, day_num: u32) -> Vec<String> {
@@ -1701,5 +1743,49 @@ mod tests {
         assert!(!Referee::does_statement_have_this_reference(
             &statement, &uc
         ));
+    }
+
+    // ── SearchPattern ─────────────────────────────────────────────────────────
+
+    /// The original single-regex search over the whole text.
+    fn full_text_match(pattern: &str, text: &str) -> Option<TextPart> {
+        let re = Regex::new(&format!(r"\b(.{{0,60}})\b({pattern})\b(.{{0,60}})\b")).unwrap();
+        let caps = re.captures(text)?;
+        let group = |i| caps.get(i).map_or("", |m| m.as_str()).to_string();
+        Some(TextPart {
+            before: group(1),
+            regexp_match: group(2),
+            after: group(3),
+        })
+    }
+
+    #[test]
+    fn test_search_pattern_matches_full_text_search() {
+        let filler = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(20);
+        let wide = "東京都 Zürich Ελλάδα 𝔘𝔫𝔦𝔠𝔬𝔡𝔢 ".repeat(30);
+        let cases = [
+            ("Douglas Adams", format!("{filler}Douglas Adams{filler}")),
+            ("Douglas Adams", format!("{wide}Douglas Adams{wide}")),
+            ("Zürich", format!("{wide}in Zürich, später{wide}")),
+            ("11 March 1952", format!("{filler}\nborn 11 March 1952\n{filler}")),
+            ("1952", format!("x{filler}1952")),
+            ("Adams", "Adams".to_string()),
+            ("Adams", format!("{filler}{}", "Adams, ".repeat(100))),
+            ("Adams", format!("{filler}Adamson only")),
+            ("Adams", String::new()),
+        ];
+        for (pattern, text) in &cases {
+            let sp = SearchPattern::new(pattern).unwrap();
+            assert_eq!(
+                sp.first_match(text),
+                full_text_match(pattern, text),
+                "pattern {pattern}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_search_pattern_invalid_regex() {
+        assert!(SearchPattern::new("(unclosed").is_none());
     }
 }
