@@ -1,4 +1,3 @@
-use crate::TOOLFORGE_DB;
 use crate::initial_search::InitialSearch;
 use crate::isbn::ISBN2wiki;
 use crate::person::Person;
@@ -32,7 +31,6 @@ use tower_http::{
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 use wikibase_rest_api::Patch;
-use wikimisc::mysql_async::prelude::Queryable;
 
 /// Hard upper bound on how long any single request may take before the
 /// connection is released with a 408.
@@ -118,23 +116,17 @@ fn items2table(items: &[String]) -> String {
 
 // ── Route handlers ───────────────────────────────────────────────────────────
 
-/// Health check endpoint that verifies database connectivity
+/// Liveness check, used by Kubernetes to restart a hung server.
+///
+/// Deliberately does not touch the database: the probe times out after 1s,
+/// and a restart cannot fix a slow or unreachable replica anyway.
 #[utoipa::path(
     get,
     path = "/healthz",
-    responses((status = 200, description = "Database connected"), (status = 503, description = "Database unavailable"))
+    responses((status = 200, description = "Server is responsive"))
 )]
-async fn healthz() -> impl IntoResponse {
-    match tokio::time::timeout(Duration::from_secs(2), async {
-        let mut conn = TOOLFORGE_DB.get_connection("wikidata").await?;
-        let _: Option<u8> = conn.query_first("SELECT 1").await?;
-        Ok::<_, anyhow::Error>(())
-    })
-    .await
-    {
-        Ok(Ok(())) => StatusCode::OK,
-        _ => StatusCode::SERVICE_UNAVAILABLE,
-    }
+async fn healthz() -> StatusCode {
+    StatusCode::OK
 }
 
 /// Root endpoint returning the main HTML page
