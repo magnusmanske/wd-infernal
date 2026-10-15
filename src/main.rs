@@ -63,6 +63,16 @@ pub mod server;
 pub mod viaf;
 pub mod wikidata;
 
+/// The parsed `config.json`, or `None` if there is no such file.
+pub fn load_config() -> serde_json::Result<Option<serde_json::Value>> {
+    let Ok(file) = File::open("config.json")
+        .or_else(|_| File::open("/data/project/wd-infernal/wd-infernal/config.json"))
+    else {
+        return Ok(None);
+    };
+    serde_json::from_reader(std::io::BufReader::new(file)).map(Some)
+}
+
 pub static TOOLFORGE_DB: LazyLock<ToolforgeDB> = LazyLock::new(|| {
     /* For local testing:
     ssh magnus@login.toolforge.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
@@ -70,11 +80,7 @@ pub static TOOLFORGE_DB: LazyLock<ToolforgeDB> = LazyLock::new(|| {
      */
 
     let mut ret = ToolforgeDB::default();
-    let file = File::open("config.json")
-        .or_else(|_| File::open("/data/project/wd-infernal/wd-infernal/config.json"));
-    if let Ok(file) = file {
-        let reader = std::io::BufReader::new(file);
-        let config: serde_json::Value = serde_json::from_reader(reader).unwrap();
+    if let Some(config) = load_config().unwrap() {
         ret.add_mysql_pool("wikidata", &config["wikidata"]).unwrap();
         ret.add_mysql_pool("termstore", &config["termstore"])
             .unwrap();

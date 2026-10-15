@@ -88,6 +88,9 @@ async fn rate_limit_middleware(
     next: middleware::Next,
 ) -> impl IntoResponse {
     if !limiter.check().await {
+        let route = crate::metrics::route_label(&req);
+        wikimisc::metrics::counter!("wd_infernal_rate_limited_total", "route" => route)
+            .increment(1);
         return StatusCode::TOO_MANY_REQUESTS.into_response();
     }
     next.run(req).await
@@ -380,6 +383,7 @@ impl Server {
     #[allow(clippy::cognitive_complexity)]
     pub async fn start() -> Result<(), Box<dyn std::error::Error>> {
         tracing_subscriber::fmt::init();
+        crate::metrics::start_telemetry();
 
         // Initialize the shared Referee (fetches siteinfo from Wikidata) before accepting requests.
         tracing::info!("initializing Referee...");
@@ -459,12 +463,13 @@ impl Server {
             )
             .merge(rate_limited_cached)
             .merge(cached)
-            .layer(middleware::from_fn(crate::metrics::middleware))
             // Backstop: no request may occupy a connection indefinitely.
             .layer(TimeoutLayer::with_status_code(
                 StatusCode::REQUEST_TIMEOUT,
                 REQUEST_TIMEOUT,
             ))
+            // Outside the timeout, so timed-out requests are counted too.
+            .layer(middleware::from_fn(crate::metrics::middleware))
             .layer(TraceLayer::new_for_http())
             .layer(CompressionLayer::new().br(true).gzip(true))
             .layer(cors)

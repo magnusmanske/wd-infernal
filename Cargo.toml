@@ -36,7 +36,8 @@ isbn = "0.8"
 wikibase_rest_api = "0.1"
 wikimisc = { git = "https://github.com/magnusmanske/wikimisc", features = [
 	"database",
-	"site-matrix"]
+	"site-matrix",
+	"telemetry"]
 }
 tools_interface = "0.1"
 utoipa = { version = "5", features = ["axum_extras"] }
