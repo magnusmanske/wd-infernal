@@ -22,6 +22,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tower_http::{
+    catch_panic::CatchPanicLayer,
     compression::CompressionLayer,
     cors::{AllowOrigin, Any, CorsLayer},
     set_header::SetResponseHeaderLayer,
@@ -377,6 +378,10 @@ impl Server {
         tracing_subscriber::fmt::init();
         crate::metrics::start_telemetry();
 
+        // A broken DB config must stop the server here: on first use, its panic
+        // would poison `TOOLFORGE_DB` and fail every later DB request instead.
+        std::sync::LazyLock::force(&crate::TOOLFORGE_DB);
+
         // Initialize the shared Referee (fetches siteinfo from Wikidata) before accepting requests.
         tracing::info!("initializing Referee...");
         crate::referee::init_referee().await?;
@@ -406,13 +411,6 @@ impl Server {
     }
 
     fn router() -> Router {
-        let cors = CorsLayer::new()
-            .allow_origin(AllowOrigin::predicate(|origin: &HeaderValue, _| {
-                Self::is_allowed_origin(origin)
-            }))
-            .allow_methods(Any)
-            .allow_headers(Any);
-
         let rate_limit = RateLimiter::new(10, Duration::from_secs(1));
 
         let rate_limited_cached = Router::new()
@@ -440,7 +438,7 @@ impl Server {
                 HeaderValue::from_static("public, max-age=300"),
             ));
 
-        Router::new()
+        let routes = Router::new()
             .merge(SwaggerUi::new("/swagger-ui").url("/openapi.json", ApiDoc::openapi()))
             .route("/", get(root))
             .route("/healthz", get(healthz))
@@ -454,13 +452,29 @@ impl Server {
                 get(country_year_property),
             )
             .merge(rate_limited_cached)
-            .merge(cached)
+            .merge(cached);
+        Self::add_middleware(routes)
+    }
+
+    /// Wraps `routes` in the middleware every request passes through.
+    fn add_middleware(routes: Router) -> Router {
+        let cors = CorsLayer::new()
+            .allow_origin(AllowOrigin::predicate(|origin: &HeaderValue, _| {
+                Self::is_allowed_origin(origin)
+            }))
+            .allow_methods(Any)
+            .allow_headers(Any);
+
+        routes
             // Backstop: no request may occupy a connection indefinitely.
             .layer(TimeoutLayer::with_status_code(
                 StatusCode::REQUEST_TIMEOUT,
                 REQUEST_TIMEOUT,
             ))
-            // Outside the timeout, so timed-out requests are counted too.
+            // A panicking handler becomes a 500 rather than a dropped connection.
+            .layer(CatchPanicLayer::new())
+            // Outside the timeout and the panic catcher, so timed-out and
+            // panicked requests are counted too.
             .layer(middleware::from_fn(crate::metrics::middleware))
             .layer(TraceLayer::new_for_http())
             .layer(CompressionLayer::new().br(true).gzip(true))
@@ -505,6 +519,7 @@ struct ApiDoc;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::Ordering;
 
     // ── is_allowed_origin ─────────────────────────────────────────────────────
 
@@ -631,6 +646,27 @@ mod tests {
             html.contains("</tr>\n<tr>"),
             "rows should be separated by newlines"
         );
+    }
+
+    // ── add_middleware ────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_panicking_handler_returns_500_and_is_counted() {
+        async fn boom() -> &'static str {
+            panic!("deliberate test panic");
+        }
+        let app = Server::add_middleware(Router::new().route("/boom", get(boom)));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/boom", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let errors_before = crate::metrics::ERROR_RESPONSES.load(Ordering::Relaxed);
+        for _ in 0..2 {
+            // The second round checks the server survived the first panic.
+            let status = reqwest::get(&url).await.unwrap().status();
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        }
+        assert!(crate::metrics::ERROR_RESPONSES.load(Ordering::Relaxed) >= errors_before + 2);
     }
 
     // ── get_server_address ────────────────────────────────────────────────────

@@ -39,8 +39,12 @@
     clippy::wildcard_imports
 )]
 
+/// mimalloc (in secure mode) let RSS creep up across identical referee
+/// workloads, keeping memory resident after the entity cache was cleared.
+/// jemalloc's peaks stayed flat, and its background threads return freed
+/// memory to the OS.
 #[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 use serde_json::json;
 use std::fs::File;

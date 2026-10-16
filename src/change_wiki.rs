@@ -49,7 +49,10 @@ impl ChangeWiki {
         let mut conn = TOOLFORGE_DB.get_connection("wikidata").await?;
         let mut ret: HashMap<String, String> = HashMap::new();
         for chunk in self.titles.chunks(5000) {
-            let item_ids: Vec<String> = chunk.iter().map(|t| t[1..].to_string()).collect();
+            let item_ids: Vec<&str> = chunk.iter().filter_map(|t| Self::item_number(t)).collect();
+            if item_ids.is_empty() {
+                continue;
+            }
             let placeholders: String = std::iter::repeat_n("?", item_ids.len())
                 .collect::<Vec<_>>()
                 .join(",");
@@ -59,7 +62,7 @@ impl ChangeWiki {
             // Prepend wiki_to as the first positional parameter
             let mut params: Vec<String> = Vec::with_capacity(item_ids.len() + 1);
             params.push(wiki_to.to_string());
-            params.extend(item_ids);
+            params.extend(item_ids.into_iter().map(str::to_string));
             let results = conn
                 .exec_iter(sql, params)
                 .await?
@@ -98,6 +101,12 @@ impl ChangeWiki {
         Ok(ret)
     }
 
+    /// The numeric part of an item ID such as `Q42`; `None` for anything else.
+    fn item_number(item: &str) -> Option<&str> {
+        item.strip_prefix(['Q', 'q'])
+            .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    }
+
     /// Normalize a wiki name to a safe lowercase string of only ASCII letters and underscores.
     fn normalize_wiki(wiki: &str) -> String {
         wiki.trim()
@@ -111,6 +120,16 @@ impl ChangeWiki {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_item_number() {
+        assert_eq!(ChangeWiki::item_number("Q42"), Some("42"));
+        assert_eq!(ChangeWiki::item_number("q42"), Some("42"));
+        // User input; none of these may panic (multi-byte first char, empty).
+        for bad in ["", "Q", "Ä42", "Q4x", "P42", "Q-1", "Q٤٢"] {
+            assert_eq!(ChangeWiki::item_number(bad), None, "{bad:?}");
+        }
+    }
 
     async fn check_db_connection() -> bool {
         TOOLFORGE_DB.get_connection("termstore").await.is_ok()

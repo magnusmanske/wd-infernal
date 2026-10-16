@@ -9,11 +9,13 @@ use wikibase_rest_api::prelude::*;
 
 static RE_GOOGLE_BOOKS_ID: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^([a-zA-Z0-9]+)$").unwrap());
-static RE_PAGES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\d+) pages$").unwrap());
-static RE_YEAR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\d{4})$").unwrap());
-static RE_ISBN_10: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^ISBN:(\d{9}[0-9X])$").unwrap());
+// `[0-9]`, not `\d`, which also matches non-ASCII digits: the ISBN captures
+// are sliced by byte offset, and the year goes into a Wikidata time value.
+static RE_PAGES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^([0-9]+) pages$").unwrap());
+static RE_YEAR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^([0-9]{4})$").unwrap());
+static RE_ISBN_10: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^ISBN:([0-9]{9}[0-9X])$").unwrap());
 static RE_ISBN_13: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^ISBN:(\d{12}[0-9X])$").unwrap());
+    LazyLock::new(|| Regex::new(r"^ISBN:([0-9]{12}[0-9X])$").unwrap());
 static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(|| {
     Client::builder()
         .user_agent(
@@ -177,6 +179,14 @@ impl GoogleBooksFeed {
 mod tests {
     use super::*;
     use crate::reference::DataValue;
+
+    #[test]
+    fn test_regexes_reject_non_ascii_digits() {
+        // Arabic-Indic digits are two bytes each; slicing them would panic.
+        assert!(RE_ISBN_10.captures("ISBN:٠١٢٣٤٥٦٧٨X").is_none());
+        assert!(RE_ISBN_13.captures("ISBN:٠١٢٣٤٥٦٧٨٩٠١٢").is_none());
+        assert!(RE_YEAR.captures("٢٠٢٠").is_none());
+    }
 
     fn parsed_isbn2wiki() -> ISBN2wiki {
         let isbn2wiki = ISBN2wiki::new("9782267027006").unwrap();

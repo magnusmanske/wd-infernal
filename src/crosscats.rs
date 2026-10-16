@@ -1,4 +1,3 @@
-use async_lazy::Lazy;
 use axum::http::StatusCode;
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
@@ -6,19 +5,16 @@ use std::{
     collections::HashMap,
     sync::{Arc, LazyLock},
 };
+use tokio::sync::OnceCell;
 use tools_interface::{PetScan, Tool};
 use url::Url;
 use wikibase::mediawiki::api::Api;
 use wikibase_rest_api::prelude::*;
 use wikimisc::site_matrix::SiteMatrix;
 
-static SITE_MATRIX: Lazy<SiteMatrix> = Lazy::new(|| {
-    Box::pin(async {
-        CrossCats::load_site_matrix()
-            .await
-            .expect("Could not load site matrix")
-    })
-});
+/// Loaded on first use. A failed load is retried by the next request, rather
+/// than poisoning the cell for the rest of the process lifetime.
+static SITE_MATRIX: OnceCell<SiteMatrix> = OnceCell::const_new();
 
 static REST_API: LazyLock<Arc<RestApi>> =
     LazyLock::new(|| Arc::new(RestApi::wikidata().expect("Could not create RestApi")));
@@ -123,8 +119,8 @@ impl CrossCats {
 
     async fn get_language_project_for_wiki(wiki: &str) -> Result<(String, String), StatusCode> {
         let url = SITE_MATRIX
-            .force()
-            .await
+            .get_or_try_init(Self::load_site_matrix)
+            .await?
             .get_server_url_for_wiki(wiki)
             .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
         let parsed_url = Url::parse(&url).map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
