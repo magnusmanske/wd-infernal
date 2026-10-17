@@ -101,6 +101,9 @@ impl CrossCats {
     }
 
     async fn get_category_item(category_item_id: &str) -> Result<Item, StatusCode> {
+        if !crate::wikidata::is_item_id(category_item_id) {
+            return Err(StatusCode::BAD_REQUEST);
+        }
         let category_item_id = EntityId::Item(category_item_id.to_string());
         let category_item = Item::get(category_item_id, &REST_API)
             .await

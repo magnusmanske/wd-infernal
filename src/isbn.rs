@@ -38,7 +38,10 @@ impl ISBN2wiki {
     }
 
     pub async fn new_from_item(item_id: &str) -> Option<Self> {
-        let entity_id = EntityId::new(item_id).ok()?;
+        if !crate::wikidata::is_item_id(item_id) {
+            return None;
+        }
+        let entity_id = EntityId::item(item_id);
         let api = RestApi::wikidata().ok()?;
         let statements = Statements::get(&entity_id, &api).await.ok()?;
         let isbn10 = Self::extract_isbn_string(&statements, "P957")
@@ -350,6 +353,13 @@ impl ISBN2wiki {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn test_new_from_item_rejects_bad_item() {
+        for item in ["Q1/../../x", "P957", ""] {
+            assert!(ISBN2wiki::new_from_item(item).await.is_none(), "{item}");
+        }
+    }
 
     // ── str2digits ────────────────────────────────────────────────────────────
 

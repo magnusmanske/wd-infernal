@@ -1,10 +1,20 @@
 use axum::http::StatusCode;
 use mediawiki::{Api, hashmap};
+use serde_json::Value;
 use std::collections::HashMap;
 use wikibase::Snak;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Wikidata;
+
+/// Whether `id` is a well-formed item ID such as `Q42`. Untrusted IDs must
+/// pass this before they go into a SPARQL query or a URL path.
+pub fn is_item_id(id: &str) -> bool {
+    id.strip_prefix('Q').is_some_and(|num| {
+        num.starts_with(|c: char| ('1'..='9').contains(&c))
+            && num.bytes().all(|b| b.is_ascii_digit())
+    })
+}
 
 impl Wikidata {
     pub fn infernal_reference_snak() -> Snak {
@@ -49,28 +59,49 @@ impl Wikidata {
         name: &str,
         p31: &str,
     ) -> Result<Vec<String>, StatusCode> {
-        let query = format!("{name} haswbstatement:P31={p31}");
-        let results = Self::api_search(api, &query).await?;
+        // A quoted phrase, so the name cannot inject search keywords like `insource:`.
+        let phrase = name.replace('"', " ");
+        let query = format!("\"{phrase}\" haswbstatement:P31={p31}");
+        let results: Vec<String> = Self::api_search(api, &query)
+            .await?
+            .into_iter()
+            .filter(|q| is_item_id(q))
+            .collect();
         if results.is_empty() {
             return Ok(results);
         }
         let values = results.join(" wd:");
 
+        // Labels are compared in `items_with_label`, so the name never becomes
+        // part of the query.
         let sparql = format!(
-            r#"SELECT DISTINCT ?q {{
+            r#"SELECT DISTINCT ?q ?label {{
           VALUES ?q {{ wd:{values} }}
-          ?q wdt:P31 wd:{p31} ; rdfs:label ?label . FILTER ( str(?label)="{name}" )
+          ?q wdt:P31 wd:{p31} ; rdfs:label ?label
           }}"#
         );
 
-        let json = match api.sparql_query(&sparql).await {
-            Ok(json) => json,
-            Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
-        };
-        let mut items = api.entities_from_sparql_result(&json, "q");
+        let json = api
+            .sparql_query(&sparql)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        Ok(Self::items_with_label(&json, name))
+    }
+
+    /// The items `?q` in a SPARQL result whose `?label` is exactly `label`.
+    fn items_with_label(json: &Value, label: &str) -> Vec<String> {
+        let mut items: Vec<String> = json["results"]["bindings"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|binding| binding["label"]["value"].as_str() == Some(label))
+            .filter_map(|binding| binding["q"]["value"].as_str()?.rsplit('/').next())
+            .filter(|q| is_item_id(q))
+            .map(str::to_string)
+            .collect();
         items.sort();
         items.dedup();
-        Ok(items)
+        items
     }
 
     /// Like [`Self::search_names_by_class`] but returns an item only when there
@@ -104,6 +135,33 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(results, vec!["Q1891133"]);
+    }
+
+    #[test]
+    fn test_is_item_id() {
+        for id in ["Q1", "Q42", "Q131287902"] {
+            assert!(is_item_id(id), "{id} should be valid");
+        }
+        for id in [
+            "", "Q", "Q0", "Q01", "q42", "P31", "Q42 ", "Q4-2", "Q42}", "Q1/../x",
+            "Q1 } ?x ?y ?z {",
+        ] {
+            assert!(!is_item_id(id), "{id} should be invalid");
+        }
+    }
+
+    #[test]
+    fn test_items_with_label_matches_exactly() {
+        let json = serde_json::json!({"results": {"bindings": [
+            {"q": {"value": "http://www.wikidata.org/entity/Q1"}, "label": {"value": "Manske"}},
+            {"q": {"value": "http://www.wikidata.org/entity/Q1"}, "label": {"value": "Manske"}},
+            {"q": {"value": "http://www.wikidata.org/entity/Q2"}, "label": {"value": "manske"}},
+            {"q": {"value": "http://www.wikidata.org/entity/Q3"}, "label": {"value": "Manske\" || true"}},
+            {"q": {"value": "http://www.wikidata.org/entity/Q4}"}, "label": {"value": "Manske"}},
+        ]}});
+        assert_eq!(Wikidata::items_with_label(&json, "Manske"), vec!["Q1"]);
+        assert!(Wikidata::items_with_label(&json, "Nobody").is_empty());
+        assert!(Wikidata::items_with_label(&serde_json::json!({}), "Manske").is_empty());
     }
 
     #[tokio::test]

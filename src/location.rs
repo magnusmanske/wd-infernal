@@ -1,4 +1,4 @@
-use crate::wikidata::Wikidata;
+use crate::wikidata::{Wikidata, is_item_id};
 use axum::http::StatusCode;
 use wikibase::{Reference, Snak, Statement};
 
@@ -10,6 +10,9 @@ impl Location {
         place_q: &str,
         year: i32,
     ) -> Result<Vec<Statement>, StatusCode> {
+        if !is_item_id(place_q) {
+            return Err(StatusCode::BAD_REQUEST);
+        }
         // get preferred and normal country statements, but not deprecated ones
         let sparql = format!(
             r#"SELECT ?country ?year_from ?year_to {{
@@ -124,6 +127,12 @@ impl Location {
 mod tests {
     use super::*;
     use wikibase::{EntityType, EntityValue};
+
+    #[tokio::test]
+    async fn test_country_for_location_and_date_rejects_bad_item() {
+        let result = Location::country_for_location_and_date("Q1 } ?x ?y ?z {", 2000).await;
+        assert_eq!(result.unwrap_err(), StatusCode::BAD_REQUEST);
+    }
 
     #[tokio::test]
     #[ignore]
