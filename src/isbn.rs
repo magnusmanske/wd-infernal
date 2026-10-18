@@ -1,6 +1,6 @@
 use crate::google_books::GoogleBooksFeed;
 use crate::open_library::OpenLibraryEdition;
-use crate::reference::{DataValue, Reference};
+use crate::reference::{DataValue, Reference, ValueMatch};
 use anyhow::{Result, anyhow};
 use grscraper::MetadataRequestBuilder;
 use isbn::{Isbn10, Isbn13};
@@ -32,6 +32,9 @@ pub struct ISBN2wiki {
     pub isbn10: Option<Isbn10>,
     pub isbn13: Option<Isbn13>,
     pub values: Mutex<HashMap<String, HashMap<DataValue, HashSet<Reference>>>>,
+    /// The item's current statements, when created from an item; patches are
+    /// generated against these, so existing values get references, not duplicates.
+    existing: Statements,
 }
 
 impl ISBN2wiki {
@@ -71,6 +74,7 @@ impl ISBN2wiki {
         let mut ret = ISBN2wiki {
             isbn10,
             isbn13,
+            existing: statements,
             ..Default::default()
         };
 
@@ -304,9 +308,8 @@ impl ISBN2wiki {
     }
 
     pub fn generate_patch(&self, item_id: &str) -> Result<impl Patch> {
-        let entity_id = EntityId::new(item_id)?;
-        let statements_old = Statements::default();
-        let mut statements_new = statements_old.clone();
+        EntityId::new(item_id)?; // Validates the ID
+        let mut statements_new = self.existing.clone();
         let values = self
             .values
             .lock()
@@ -314,14 +317,16 @@ impl ISBN2wiki {
 
         for (property, dv2refs) in values.iter() {
             for (datavalue, references) in dv2refs {
-                let expected_value = datavalue.as_statement_value();
                 let mut statements: Vec<&mut Statement> = vec![];
+                let mut stated_more_precisely = false;
                 if let Some(existing) = statements_new.statements_mut().get_mut(property) {
-                    let tmp: Vec<_> = existing
-                        .iter_mut()
-                        .filter(|statement| *statement.value() == expected_value)
-                        .collect();
-                    statements.extend(tmp);
+                    for statement in existing.iter_mut() {
+                        match datavalue.compare(statement.value()) {
+                            ValueMatch::Same => statements.push(statement),
+                            ValueMatch::MorePrecise => stated_more_precisely = true,
+                            ValueMatch::Different => {}
+                        }
+                    }
                 }
 
                 // If more than one statement, remove deprecated
@@ -348,11 +353,12 @@ impl ISBN2wiki {
                 // or create new statement with references
                 match statements.first_mut() {
                     Some(statement) => Self::add_new_references_to_statement(statement, references),
+                    // A less precise duplicate would only add noise
+                    None if stated_more_precisely => {}
                     None => {
                         let mut statement = Statement::default();
-                        statement.new_id_for_entity(&entity_id);
                         statement.set_property(PropertyType::property(property.to_owned()));
-                        statement.set_value(expected_value);
+                        statement.set_value(datavalue.as_statement_value());
                         Self::add_new_references_to_statement(&mut statement, references);
                         drop(statements);
                         statements_new
@@ -365,7 +371,7 @@ impl ISBN2wiki {
             }
         }
 
-        let patch = statements_old.patch(&statements_new)?;
+        let patch = statements_new.patch(&self.existing)?;
         Ok(patch)
     }
 
@@ -655,6 +661,66 @@ mod tests {
         assert!(
             patch.is_err(),
             "generate_patch should fail for invalid entity ID"
+        );
+    }
+
+    #[test]
+    fn test_generate_patch_against_existing_statements() {
+        let statement = |id: &str, property: &str, content: serde_json::Value| {
+            serde_json::json!({
+                "id": format!("Q1${id}"),
+                "property": {"id": property},
+                "value": {"type": "value", "content": content},
+                "rank": "normal",
+                "qualifiers": [],
+                "references": []
+            })
+        };
+        let existing = Statements::from_json(&serde_json::json!({
+            "P957": [statement("1", "P957", "84-226-4891-1".into())],
+            "P1104": [statement("2", "P1104", serde_json::json!({"amount": "+515", "unit": "1"}))],
+            "P577": [statement("3", "P577", serde_json::json!({
+                "time": "+2014-10-00T00:00:00Z",
+                "precision": 10,
+                "calendarmodel": GREGORIAN_CALENDAR
+            }))],
+        }))
+        .unwrap();
+        let isbn2wiki = ISBN2wiki {
+            existing,
+            ..ISBN2wiki::new("8422648911").unwrap()
+        };
+        let source = Reference::prop("P648", "OL1M");
+        let year_2014 = DataValue::Date {
+            time: "+2014-01-01T00:00:00Z".to_string(),
+            precision: TimePrecision::Year,
+        };
+        isbn2wiki.add_reference("P1104", DataValue::Quantity(515), source.clone());
+        isbn2wiki.add_reference("P577", year_2014, source.clone());
+        isbn2wiki.add_reference("P648", DataValue::String("OL1M".to_string()), source);
+
+        let patch = isbn2wiki.generate_patch("Q1").unwrap();
+        let mut ops: Vec<_> = patch
+            .patch()
+            .iter()
+            .map(|op| {
+                let op = serde_json::to_value(op).unwrap();
+                format!(
+                    "{} {}",
+                    op["op"].as_str().unwrap(),
+                    op["path"].as_str().unwrap()
+                )
+            })
+            .collect();
+        ops.sort();
+        // Existing ISBN: untouched. Same page count: referenced. Year of an
+        // existing month: skipped. New ID: added.
+        assert_eq!(
+            ops,
+            [
+                "add /statements/P1104/0/references/0",
+                "add /statements/P648/-",
+            ]
         );
     }
 

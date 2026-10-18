@@ -105,7 +105,7 @@ impl CrossCats {
             return Err(StatusCode::BAD_REQUEST);
         }
         let category_item_id = EntityId::Item(category_item_id.to_string());
-        let category_item = Item::get(category_item_id, &REST_API)
+        let category_item = Item::get(&category_item_id, &REST_API)
             .await
             .map_err(|_| StatusCode::NOT_FOUND)?;
         Ok(category_item)

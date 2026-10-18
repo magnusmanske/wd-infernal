@@ -30,13 +30,88 @@ impl DataValue {
                 precision: precision.to_owned(),
                 calendarmodel: GREGORIAN_CALENDAR.to_string(),
             },
+            // Wikibase format: signed amount, "1" for no unit
             DataValue::Quantity(amount) => StatementValueContent::Quantity {
-                amount: format!("{amount}"),
-                unit: "".to_string(),
+                amount: format!("{amount:+}"),
+                unit: "1".to_string(),
             },
         };
         StatementValue::Value(svc)
     }
+
+    /// How an existing statement value relates to this one. Compared by
+    /// meaning, as Wikidata formats some values differently, e.g. "+0042" or
+    /// a year as "+2000-00-00T00:00:00Z".
+    pub fn compare(&self, existing: &StatementValue) -> ValueMatch {
+        let StatementValue::Value(existing) = existing else {
+            return ValueMatch::Different;
+        };
+        let same = match (self, existing) {
+            (DataValue::Quantity(n), StatementValueContent::Quantity { amount, unit }) => {
+                unit == "1" && amount.parse::<i64>() == Ok(*n)
+            }
+            (
+                DataValue::Date { time, precision },
+                StatementValueContent::Time {
+                    time: existing_time,
+                    precision: existing_precision,
+                    calendarmodel,
+                },
+            ) => {
+                return Self::compare_dates(
+                    (time, *precision),
+                    (existing_time, *existing_precision),
+                    calendarmodel,
+                );
+            }
+            _ => StatementValue::Value(existing.to_owned()) == self.as_statement_value(),
+        };
+        if same {
+            ValueMatch::Same
+        } else {
+            ValueMatch::Different
+        }
+    }
+
+    fn compare_dates(
+        (time, precision): (&str, TimePrecision),
+        (existing_time, existing_precision): (&str, TimePrecision),
+        calendarmodel: &str,
+    ) -> ValueMatch {
+        if calendarmodel != GREGORIAN_CALENDAR || existing_precision < precision {
+            return ValueMatch::Different;
+        }
+        let same_at_precision = match Self::date_parts(time, precision) {
+            Some(parts) => Self::date_parts(existing_time, precision) == Some(parts),
+            None => time == existing_time, // Unusual precision; require identity
+        };
+        match (same_at_precision, existing_precision == precision) {
+            (false, _) => ValueMatch::Different,
+            (true, true) => ValueMatch::Same,
+            (true, false) => ValueMatch::MorePrecise,
+        }
+    }
+
+    /// Sign plus the year/month/day components significant at `precision`.
+    fn date_parts(time: &str, precision: TimePrecision) -> Option<Vec<&str>> {
+        let n = match precision {
+            TimePrecision::Year => 1,
+            TimePrecision::Month => 2,
+            TimePrecision::Day => 3,
+            _ => return None,
+        };
+        let sign = time.get(..1)?;
+        let parts = time.get(1..)?.split(['-', 'T']).take(n);
+        Some(std::iter::once(sign).chain(parts).collect())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueMatch {
+    Same,
+    /// Same value, stated more precisely (e.g. a full date for a year)
+    MorePrecise,
+    Different,
 }
 
 #[derive(Debug, Clone, Default, Hash, PartialEq, Eq)]
@@ -173,7 +248,7 @@ mod tests {
             matches!(
                 sv,
                 StatementValue::Value(StatementValueContent::Quantity { amount, unit })
-                    if amount == "42" && unit.is_empty()
+                    if amount == "+42" && unit == "1"
             ),
             "Quantity variant should produce a Quantity StatementValue"
         );
@@ -318,6 +393,79 @@ mod tests {
             DataValue::Entity("x".to_string()),
             "String and Entity variants with same payload must be distinct"
         );
+    }
+
+    // ── compare ──────────────────────────────────────────────────────────────
+
+    fn quantity(amount: &str, unit: &str) -> StatementValue {
+        StatementValue::Value(StatementValueContent::Quantity {
+            amount: amount.to_string(),
+            unit: unit.to_string(),
+        })
+    }
+
+    fn time(time: &str, precision: TimePrecision) -> StatementValue {
+        StatementValue::Value(StatementValueContent::Time {
+            time: time.to_string(),
+            precision,
+            calendarmodel: GREGORIAN_CALENDAR.to_string(),
+        })
+    }
+
+    fn year(year: &str) -> DataValue {
+        DataValue::Date {
+            time: format!("+{year}-01-01T00:00:00Z"),
+            precision: TimePrecision::Year,
+        }
+    }
+
+    #[test]
+    fn test_compare_quantity_by_number() {
+        let pages = DataValue::Quantity(515);
+        assert_eq!(pages.compare(&quantity("+515", "1")), ValueMatch::Same);
+        assert_eq!(pages.compare(&quantity("+0515", "1")), ValueMatch::Same);
+        assert_eq!(pages.compare(&quantity("+528", "1")), ValueMatch::Different);
+        let metre = "http://www.wikidata.org/entity/Q11573";
+        assert_eq!(
+            pages.compare(&quantity("+515", metre)),
+            ValueMatch::Different
+        );
+    }
+
+    #[test]
+    fn test_compare_date_at_precision() {
+        let y2014 = year("2014");
+        for existing in ["+2014-00-00T00:00:00Z", "+2014-01-01T00:00:00Z"] {
+            let existing = time(existing, TimePrecision::Year);
+            assert_eq!(y2014.compare(&existing), ValueMatch::Same);
+        }
+        let month = time("+2014-10-00T00:00:00Z", TimePrecision::Month);
+        assert_eq!(y2014.compare(&month), ValueMatch::MorePrecise);
+        let other_year = time("+2015-00-00T00:00:00Z", TimePrecision::Year);
+        assert_eq!(y2014.compare(&other_year), ValueMatch::Different);
+        let decade = time("+2010-00-00T00:00:00Z", TimePrecision::Decade);
+        assert_eq!(y2014.compare(&decade), ValueMatch::Different);
+        let bce = time("-2014-00-00T00:00:00Z", TimePrecision::Year);
+        assert_eq!(y2014.compare(&bce), ValueMatch::Different);
+    }
+
+    #[test]
+    fn test_compare_date_requires_gregorian() {
+        let julian = StatementValue::Value(StatementValueContent::Time {
+            time: "+2014-00-00T00:00:00Z".to_string(),
+            precision: TimePrecision::Year,
+            calendarmodel: JULIAN_CALENDAR.to_string(),
+        });
+        assert_eq!(year("2014").compare(&julian), ValueMatch::Different);
+    }
+
+    #[test]
+    fn test_compare_other_values_by_equality() {
+        let s = DataValue::String("84-226-4891-1".to_string());
+        assert_eq!(s.compare(&s.as_statement_value()), ValueMatch::Same);
+        let other = DataValue::String("x".to_string()).as_statement_value();
+        assert_eq!(s.compare(&other), ValueMatch::Different);
+        assert_eq!(s.compare(&StatementValue::NoValue), ValueMatch::Different);
     }
 
     #[test]

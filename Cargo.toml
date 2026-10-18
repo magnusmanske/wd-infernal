@@ -28,13 +28,13 @@ mediawiki = "0.3"
 futures = "0.3"
 url = "2"
 regex = "1"
-reqwest = "0.12"
+reqwest = { version = "0.13", features = ["json"] }
 chrono = "0.4"
 urlencoding = "2"
 anyhow = "1"
 goodreads-metadata-scraper = "0.2"
 isbn = "0.8"
-wikibase_rest_api = "0.1"
+wikibase_rest_api = "0.4"
 wikimisc = { git = "https://github.com/magnusmanske/wikimisc", features = [
 	"database",
 	"site-matrix",
