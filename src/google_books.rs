@@ -123,7 +123,7 @@ impl GoogleBooksFeed {
 
         for creator in &entry.dc_creator {
             isbn2wiki.add_reference(
-                "P225",
+                "P2093",
                 DataValue::String(creator.to_owned()),
                 Reference::prop("P675", &google_books_id),
             );
@@ -307,13 +307,13 @@ mod tests {
         let isbn2wiki = parsed_isbn2wiki();
         let values = isbn2wiki.values.lock().unwrap();
         assert!(
-            values.contains_key("P225"),
-            "Google Books XML should populate P225 (creator/author)"
+            values.contains_key("P2093"),
+            "Google Books XML should populate P2093 (author name string)"
         );
-        let found = values["P225"]
+        let found = values["P2093"]
             .keys()
             .any(|dv| matches!(dv, DataValue::String(s) if s.contains("Tolkien")));
-        assert!(found, "P225 should contain the author name Tolkien");
+        assert!(found, "P2093 should contain the author name Tolkien");
     }
 
     #[test]

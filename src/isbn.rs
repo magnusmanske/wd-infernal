@@ -173,7 +173,7 @@ impl ISBN2wiki {
         for contributor in metadata.contributors {
             if contributor.role == "Author" {
                 self.add_reference(
-                    "P225",
+                    "P2093",
                     DataValue::String(contributor.name.to_owned()),
                     Reference::prop("P8383", &goodreads_work_id),
                 );
