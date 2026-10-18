@@ -414,10 +414,10 @@ impl Server {
         let rate_limit = RateLimiter::new(10, Duration::from_secs(1));
 
         let rate_limited_cached = Router::new()
-            .route("/referee/:item", get(referee))
-            .route("/isbn/item/:item", get(isbn_item))
-            .route("/isbn/isbn/:isbn", get(isbn_isbn))
-            .route("/viaf_search/:query", get(viaf_search))
+            .route("/referee/{item}", get(referee))
+            .route("/isbn/item/{item}", get(isbn_item))
+            .route("/isbn/isbn/{isbn}", get(isbn_isbn))
+            .route("/viaf_search/{query}", get(viaf_search))
             .layer(SetResponseHeaderLayer::overriding(
                 CACHE_CONTROL,
                 HeaderValue::from_static("public, max-age=300"),
@@ -428,9 +428,9 @@ impl Server {
             ));
 
         let cached = Router::new()
-            .route("/initial_search/:query", get(initial_search))
+            .route("/initial_search/{query}", get(initial_search))
             .route(
-                "/cross_categories/:category_item/:language/:depth",
+                "/cross_categories/{category_item}/{language}/{depth}",
                 get(cross_cats),
             )
             .layer(SetResponseHeaderLayer::overriding(
@@ -443,12 +443,12 @@ impl Server {
             .route("/", get(root))
             .route("/healthz", get(healthz))
             .route("/metrics", get(crate::metrics::metrics_handler))
-            .route("/P131/:latitude/:longitude", get(p131))
-            .route("/name_gender/:name", get(name_gender))
-            .route("/country_year/:item/:year", get(country_year))
-            .route("/change_wiki/:from/:to", post(change_wiki))
+            .route("/P131/{latitude}/{longitude}", get(p131))
+            .route("/name_gender/{name}", get(name_gender))
+            .route("/country_year/{item}/{year}", get(country_year))
+            .route("/change_wiki/{from}/{to}", post(change_wiki))
             .route(
-                "/country_year/:item/:year/:property",
+                "/country_year/{item}/{year}/{property}",
                 get(country_year_property),
             )
             .merge(rate_limited_cached)
@@ -554,6 +554,15 @@ mod tests {
                 "{origin} should be rejected"
             );
         }
+    }
+
+    // ── router ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_router_builds() {
+        // axum validates route paths when they are added, panicking on invalid
+        // or conflicting ones (e.g. pre-0.8 `/:param` syntax).
+        let _ = Server::router();
     }
 
     // ── items2table ───────────────────────────────────────────────────────────

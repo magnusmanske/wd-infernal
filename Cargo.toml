@@ -8,7 +8,7 @@ repository = "https://github.com/magnusmanske/wd-infernal"
 # Returns freed memory to the OS; see the global allocator in src/main.rs.
 tikv-jemallocator = { version = "0.6", features = ["background_threads"] }
 tokio = { version = "1", features = ["full"] }
-axum = { version = "0.7", features = [
+axum = { version = "0.8", features = [
 	"http1",
 	"http2",
 	"tokio",
@@ -42,8 +42,8 @@ wikimisc = { git = "https://github.com/magnusmanske/wikimisc", features = [
 	"telemetry"]
 }
 tools_interface = "0.1"
-utoipa = { version = "5", features = ["axum_extras"] }
-utoipa-swagger-ui = { version = "8", features = ["axum"] }
+utoipa = { version = "6", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "10", features = ["axum"] }
 
 # No `panic = 'abort'`: a panicking request must fail only itself, as a 500
 # (see `CatchPanicLayer` in src/server.rs), not take the whole server down.
