@@ -24,7 +24,7 @@ tower-http = { version = "0.6", features = ["full"] }
 moka = { version = "0.12", features = ["sync"] }
 html-escape = "0.2"
 wikibase = "0.7"
-mediawiki = "0.3"
+mediawiki = "0.5"
 futures = "0.3"
 url = "2"
 regex = "1"

@@ -1789,28 +1789,6 @@ checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
 name = "mediawiki"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a9b55f9612e96529b0e0096c4112520510c842dcb2986b0b92dcc3efec2273c"
-dependencies = [
- "base64 0.22.1",
- "chrono",
- "config",
- "futures",
- "hmac",
- "nanoid",
- "reqwest",
- "serde",
- "serde_json",
- "sha1",
- "tokio",
- "unicode-case-mapping",
- "url",
- "urlencoding",
-]
-
-[[package]]
-name = "mediawiki"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "74c8d226168e906734f86608d4f920b48c0df660fe20bd71d1d46bf528b562e3"
@@ -3573,7 +3551,7 @@ dependencies = [
  "csv",
  "futures",
  "lazy_static",
- "mediawiki 0.5.2",
+ "mediawiki",
  "regex",
  "reqwest",
  "serde",
@@ -3969,7 +3947,7 @@ dependencies = [
  "goodreads-metadata-scraper",
  "html-escape",
  "isbn",
- "mediawiki 0.3.3",
+ "mediawiki",
  "moka",
  "quick-xml",
  "regex",
@@ -4040,7 +4018,7 @@ checksum = "20d8bdfbacff08d421a1327bb25756883f323a3709945d60e4979bbb728e523c"
 dependencies = [
  "curl",
  "futures",
- "mediawiki 0.5.2",
+ "mediawiki",
  "rand 0.9.5",
  "rayon",
  "regex",

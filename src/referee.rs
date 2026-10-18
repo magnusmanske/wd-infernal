@@ -2,6 +2,7 @@ use anyhow::{Result, anyhow};
 use futures::future::join_all;
 use futures::join;
 use futures::stream::{self, StreamExt};
+use mediawiki::Api;
 
 use regex::Regex;
 use reqwest::Client;
@@ -17,7 +18,7 @@ use std::{
 use tokio::sync::Semaphore;
 use wikibase::{
     DataValueType, Entity, EntityTrait, Snak, SnakDataType, Statement,
-    entity_container::EntityContainer, mediawiki::Api,
+    entity_container::EntityContainer,
 };
 
 /// Temporary struct for parsing months data from JSON
@@ -1079,7 +1080,7 @@ impl Referee {
 
     /// Hard deadline for a single referee run.
     ///
-    /// Necessary because `mediawiki` 0.3 retries HTTP 429 in an unbounded loop:
+    /// Necessary because `mediawiki` (as of 0.5) retries HTTP 429 in an unbounded loop:
     /// when the Wikimedia edge throttles us it answers `Retry-After: 100`, and the
     /// crate then sleeps and re-sends forever, so no client timeout ever fires and
     /// the request hangs indefinitely. Fail with a clear error instead.
