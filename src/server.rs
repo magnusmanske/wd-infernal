@@ -288,20 +288,32 @@ async fn isbn_isbn(Path(isbn): Path<String>) -> Result<impl IntoResponse, Status
 )]
 async fn isbn_item(Path(item): Path<String>) -> Result<impl IntoResponse, StatusCode> {
     tracing::info!("isbn_item: {item}");
-    let mut isbn2wiki = ISBN2wiki::new_from_item(&item).await.ok_or_else(|| {
+    if !crate::wikidata::is_item_id(&item) {
         tracing::warn!("isbn_item: invalid item {item}");
-        StatusCode::NOT_FOUND
-    })?;
-    isbn2wiki.retrieve().await.map_err(|e| {
-        tracing::warn!("isbn_item retrieve failed for {item}: {e}");
-        StatusCode::NOT_FOUND
-    })?;
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let Some(isbn2wiki) = isbn_data_for_item(&item).await else {
+        return Ok(Json(vec![])); // Nothing to patch
+    };
     let patch = isbn2wiki.generate_patch(&item).map_err(|e| {
         tracing::error!("isbn_item generate_patch failed for {item}: {e}");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    let ret = patch.patch().to_owned();
-    Ok(Json(ret))
+    Ok(Json(patch.patch().to_owned()))
+}
+
+/// The item's ISBN data from all sources; `None` if the item has no ISBN, or
+/// upstream has no data.
+async fn isbn_data_for_item(item: &str) -> Option<ISBN2wiki> {
+    let Some(mut isbn2wiki) = ISBN2wiki::new_from_item(item).await else {
+        tracing::info!("isbn_item: no ISBN loaded from {item}");
+        return None;
+    };
+    if let Err(e) = isbn2wiki.retrieve().await {
+        tracing::info!("isbn_item retrieve failed for {item}: {e}");
+        return None;
+    }
+    Some(isbn2wiki)
 }
 
 /// Search VIAF for names and return matching Wikidata items
@@ -310,15 +322,15 @@ async fn isbn_item(Path(item): Path<String>) -> Result<impl IntoResponse, Status
     path = "/viaf_search/{query}",
     responses((status = 200, description = "VIAF search results"))
 )]
-async fn viaf_search(Path(query): Path<String>) -> Result<impl IntoResponse, StatusCode> {
+async fn viaf_search(Path(query): Path<String>) -> impl IntoResponse {
     tracing::info!("viaf_search: {query}");
     let results = crate::viaf::search_viaf_for_local_names(&query)
         .await
-        .map_err(|e| {
+        .unwrap_or_else(|e| {
             tracing::warn!("viaf_search failed for {query}: {e}");
-            StatusCode::NOT_FOUND
-        })?;
-    Ok(Json(results))
+            vec![]
+        });
+    Json(results)
 }
 
 /// Find potential references for a Wikidata item
@@ -329,14 +341,21 @@ async fn viaf_search(Path(query): Path<String>) -> Result<impl IntoResponse, Sta
 )]
 async fn referee(Path(item): Path<String>) -> Result<impl IntoResponse, StatusCode> {
     tracing::info!("referee: {item}");
+    if !crate::wikidata::is_item_id(&item.trim().to_uppercase()) {
+        tracing::warn!("referee: invalid item {item}");
+        return Err(StatusCode::NOT_FOUND);
+    }
     let referee = crate::referee::REFEREE.get().ok_or_else(|| {
         tracing::error!("referee not initialized");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    let results = referee.get_potential_references(&item).await.map_err(|e| {
-        tracing::warn!("referee get_potential_references failed for {item}: {e}");
-        StatusCode::NOT_FOUND
-    })?;
+    let results = referee
+        .get_potential_references(&item)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!("referee get_potential_references failed for {item}: {e}");
+            vec![]
+        });
     Ok(Json(results))
 }
 
@@ -556,6 +575,28 @@ mod tests {
             assert!(
                 !Server::is_allowed_origin(&HeaderValue::from_static(origin)),
                 "{origin} should be rejected"
+            );
+        }
+    }
+
+    // ── array endpoints ───────────────────────────────────────────────────────
+
+    // Upstream failures give an empty array, but malformed input stays a 404.
+    // These return before any network access.
+    fn status<T>(result: Result<T, StatusCode>) -> StatusCode {
+        result.map(|_| ()).unwrap_err()
+    }
+
+    #[tokio::test]
+    async fn test_array_endpoints_reject_invalid_items() {
+        for item in ["foo", "Q", "Q0", "P31", "Q1/../x"] {
+            assert_eq!(
+                status(isbn_item(Path(item.into())).await),
+                StatusCode::NOT_FOUND
+            );
+            assert_eq!(
+                status(referee(Path(item.into())).await),
+                StatusCode::NOT_FOUND
             );
         }
     }
