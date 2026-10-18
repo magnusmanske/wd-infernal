@@ -289,8 +289,8 @@ async fn isbn_item(Path(item): Path<String>) -> Result<impl IntoResponse, Status
         StatusCode::NOT_FOUND
     })?;
     isbn2wiki.retrieve().await.map_err(|e| {
-        tracing::error!("isbn_item retrieve failed for {item}: {e}");
-        StatusCode::INTERNAL_SERVER_ERROR
+        tracing::warn!("isbn_item retrieve failed for {item}: {e}");
+        StatusCode::NOT_FOUND
     })?;
     let patch = isbn2wiki.generate_patch(&item).map_err(|e| {
         tracing::error!("isbn_item generate_patch failed for {item}: {e}");

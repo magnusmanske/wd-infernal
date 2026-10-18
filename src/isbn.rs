@@ -95,11 +95,29 @@ impl ISBN2wiki {
         }
     }
 
+    /// Queries all sources. Succeeds if at least one of them did, so that one
+    /// source lacking the book (or being down) does not discard the others' data.
     pub async fn retrieve(&mut self) -> Result<()> {
-        let f1 = self.load_from_goodreads();
-        let f2 = GoogleBooksFeed::load_from_google_books(self);
-        futures::try_join!(f1, f2)?;
-        Ok(())
+        let (goodreads, google_books) = futures::join!(
+            self.load_from_goodreads(),
+            GoogleBooksFeed::load_from_google_books(self),
+        );
+        Self::any_source_succeeded([("Goodreads", goodreads), ("Google Books", google_books)])
+    }
+
+    fn any_source_succeeded<const N: usize>(results: [(&str, Result<()>); N]) -> Result<()> {
+        let mut any_ok = false;
+        for (source, result) in results {
+            match result {
+                Ok(()) => any_ok = true,
+                Err(e) => tracing::info!("{source} lookup failed: {e}"),
+            }
+        }
+        if any_ok {
+            Ok(())
+        } else {
+            Err(anyhow!("No source returned metadata"))
+        }
     }
 
     async fn load_from_goodreads(&self) -> Result<()> {
@@ -359,6 +377,20 @@ mod tests {
         for item in ["Q1/../../x", "P957", ""] {
             assert!(ISBN2wiki::new_from_item(item).await.is_none(), "{item}");
         }
+    }
+
+    // ── any_source_succeeded ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_any_source_succeeded_tolerates_partial_failure() {
+        let results = [("a", Err(anyhow!("down"))), ("b", Ok(()))];
+        assert!(ISBN2wiki::any_source_succeeded(results).is_ok());
+    }
+
+    #[test]
+    fn test_any_source_succeeded_fails_if_all_fail() {
+        let results = [("a", Err(anyhow!("down"))), ("b", Err(anyhow!("down")))];
+        assert!(ISBN2wiki::any_source_succeeded(results).is_err());
     }
 
     // ── str2digits ────────────────────────────────────────────────────────────

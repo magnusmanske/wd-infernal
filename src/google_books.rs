@@ -1,19 +1,22 @@
 use crate::isbn::ISBN2wiki;
 use crate::reference::{DataValue, Reference};
 use anyhow::{Result, anyhow};
+use isbn::Isbn;
 use regex::Regex;
 use reqwest::Client;
 use serde::Deserialize;
+use std::str::FromStr;
 use std::sync::LazyLock;
 use wikibase_rest_api::prelude::*;
 
 static RE_GOOGLE_BOOKS_ID: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^([a-zA-Z0-9]+)$").unwrap());
-// `[0-9]`, not `\d`, which also matches non-ASCII digits: the ISBN captures
-// are sliced by byte offset, and the year goes into a Wikidata time value.
+// `[0-9]`, not `\d`, which also matches non-ASCII digits: the year goes into
+// a Wikidata time value.
 static RE_PAGES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^([0-9]+) pages$").unwrap());
 static RE_YEAR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^([0-9]{4})$").unwrap());
-static RE_ISBN_10: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^ISBN:([0-9]{9}[0-9X])$").unwrap());
+static RE_ISBN_10: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^ISBN:([0-9]{9}[0-9X])$").unwrap());
 static RE_ISBN_13: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^ISBN:([0-9]{12}[0-9X])$").unwrap());
 static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(|| {
@@ -59,7 +62,7 @@ impl GoogleBooksFeed {
         let url =
             format!("https://books.google.com/books/feeds/volumes?q=isbn:{isbn}&max-results=25");
 
-        let response = HTTP_CLIENT.get(&url).send().await?;
+        let response = HTTP_CLIENT.get(&url).send().await?.error_for_status()?;
         let xml = response.text().await?;
         Self::parse_google_books_xml(isbn2wiki, &xml)
     }
@@ -143,26 +146,11 @@ impl GoogleBooksFeed {
             if let Some(id) = Self::capture1(&RE_GOOGLE_BOOKS_ID, identifier) {
                 google_books_id = Some(id);
             }
-            if let Some(isbn) = Self::capture1(&RE_ISBN_10, identifier) {
-                let formatted = format!(
-                    "{}-{}-{}-{}",
-                    &isbn[0..1],
-                    &isbn[1..4],
-                    &isbn[4..9],
-                    &isbn[9..10]
-                );
-                isbn2wiki.add_reference("P957", DataValue::String(formatted), Reference::none());
+            if let Some(isbn) = Self::capture1(&RE_ISBN_10, identifier).and_then(Self::hyphenate) {
+                isbn2wiki.add_reference("P957", DataValue::String(isbn), Reference::none());
             }
-            if let Some(isbn) = Self::capture1(&RE_ISBN_13, identifier) {
-                let formatted = format!(
-                    "{}-{}-{}-{}-{}",
-                    &isbn[0..3],
-                    &isbn[3..4],
-                    &isbn[4..6],
-                    &isbn[6..12],
-                    &isbn[12..13]
-                );
-                isbn2wiki.add_reference("P212", DataValue::String(formatted), Reference::none());
+            if let Some(isbn) = Self::capture1(&RE_ISBN_13, identifier).and_then(Self::hyphenate) {
+                isbn2wiki.add_reference("P212", DataValue::String(isbn), Reference::none());
             }
         }
         let google_books_id = google_books_id.ok_or_else(|| anyhow!("No ID found"))?;
@@ -173,6 +161,13 @@ impl GoogleBooksFeed {
         );
         Ok(google_books_id)
     }
+
+    /// Hyphenates per the ISBN registration ranges, as group and publisher
+    /// prefixes vary in length. `None` if `isbn` is not a valid ISBN.
+    fn hyphenate(isbn: String) -> Option<String> {
+        let isbn = Isbn::from_str(&isbn).ok()?;
+        Some(isbn.hyphenate().ok()?.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -182,10 +177,21 @@ mod tests {
 
     #[test]
     fn test_regexes_reject_non_ascii_digits() {
-        // Arabic-Indic digits are two bytes each; slicing them would panic.
         assert!(RE_ISBN_10.captures("ISBN:٠١٢٣٤٥٦٧٨X").is_none());
         assert!(RE_ISBN_13.captures("ISBN:٠١٢٣٤٥٦٧٨٩٠١٢").is_none());
         assert!(RE_YEAR.captures("٢٠٢٠").is_none());
+    }
+
+    #[test]
+    fn test_hyphenate_uses_registration_ranges() {
+        // Spanish (group 84) ISBNs; fixed-position hyphenation got these wrong.
+        let hyphenate = |s: &str| GoogleBooksFeed::hyphenate(s.to_string());
+        assert_eq!(hyphenate("8422648911").as_deref(), Some("84-226-4891-1"));
+        assert_eq!(
+            hyphenate("9788422648918").as_deref(),
+            Some("978-84-226-4891-8")
+        );
+        assert_eq!(hyphenate("8422648912"), None, "bad check digit");
     }
 
     fn parsed_isbn2wiki() -> ISBN2wiki {
