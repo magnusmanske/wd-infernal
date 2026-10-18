@@ -2,10 +2,33 @@ use axum::http::StatusCode;
 use mediawiki::{Api, hashmap};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use wikibase::Snak;
+use wikimisc::sparql_client::{SparqlClient, SparqlError};
+use wikimisc::sparql_endpoint::SparqlEndpoint;
+
+/// What SPARQL requests say they are. Wikimedia asks for contact information.
+const USER_AGENT: &str = concat!(
+    env!("CARGO_PKG_NAME"),
+    "/",
+    env!("CARGO_PKG_VERSION"),
+    " (",
+    env!("CARGO_PKG_REPOSITORY"),
+    ")"
+);
+
+/// Retries of a SPARQL query that failed in a way that may go away on its own.
+/// One only: a request is waiting.
+const SPARQL_RETRIES: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Wikidata;
+
+/// The item ID at the end of an entity URI such as
+/// `http://www.wikidata.org/entity/Q42`, if it is a well-formed one.
+pub fn item_from_uri(uri: &str) -> Option<&str> {
+    uri.rsplit('/').next().filter(|q| is_item_id(q))
+}
 
 /// Whether `id` is a well-formed item ID such as `Q42`. Untrusted IDs must
 /// pass this before they go into a SPARQL query or a URL path.
@@ -19,6 +42,35 @@ pub fn is_item_id(id: &str) -> bool {
 impl Wikidata {
     pub fn infernal_reference_snak() -> Snak {
         Snak::new_item("P887", "Q131287902") // based on heuristic: Wikidata Infernal
+    }
+
+    /// The Wikidata Query Service. WDQS v1 (Blazegraph) for now: v2
+    /// (`SparqlEndpoint::wikidata_main`) refuses user agents it has not
+    /// allow-listed until its public launch. Queries are plain SPARQL, except
+    /// where `Location::p131` has to try one form per engine.
+    pub fn sparql_client() -> Result<&'static SparqlClient, StatusCode> {
+        static CLIENT: OnceLock<SparqlClient> = OnceLock::new();
+        if let Some(client) = CLIENT.get() {
+            return Ok(client);
+        }
+        let client = SparqlClient::new(SparqlEndpoint::wdqs(), USER_AGENT)
+            .map_err(|e| Self::sparql_failure(&e))?
+            .with_retries(SPARQL_RETRIES);
+        Ok(CLIENT.get_or_init(|| client))
+    }
+
+    /// Runs a SPARQL query and returns the JSON result.
+    pub async fn sparql_json(sparql: &str) -> Result<Value, StatusCode> {
+        Self::sparql_client()?
+            .query_json(sparql)
+            .await
+            .map_err(|e| Self::sparql_failure(&e))
+    }
+
+    /// Logs a SPARQL failure; the caller's request fails with a 500.
+    pub fn sparql_failure(error: &SparqlError) -> StatusCode {
+        tracing::warn!(%error, "SPARQL query failed");
+        StatusCode::INTERNAL_SERVER_ERROR
     }
 
     pub async fn get_wikidata_api() -> Result<Api, StatusCode> {
@@ -59,6 +111,10 @@ impl Wikidata {
         name: &str,
         p31: &str,
     ) -> Result<Vec<String>, StatusCode> {
+        // It goes into the search and the SPARQL query.
+        if !is_item_id(p31) {
+            return Err(StatusCode::BAD_REQUEST);
+        }
         // A quoted phrase, so the name cannot inject search keywords like `insource:`.
         let phrase = name.replace('"', " ");
         let query = format!("\"{phrase}\" haswbstatement:P31={p31}");
@@ -81,10 +137,7 @@ impl Wikidata {
           }}"#
         );
 
-        let json = api
-            .sparql_query(&sparql)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let json = Self::sparql_json(&sparql).await?;
         Ok(Self::items_with_label(&json, name))
     }
 
@@ -95,8 +148,7 @@ impl Wikidata {
             .into_iter()
             .flatten()
             .filter(|binding| binding["label"]["value"].as_str() == Some(label))
-            .filter_map(|binding| binding["q"]["value"].as_str()?.rsplit('/').next())
-            .filter(|q| is_item_id(q))
+            .filter_map(|binding| item_from_uri(binding["q"]["value"].as_str()?))
             .map(str::to_string)
             .collect();
         items.sort();
@@ -148,6 +200,17 @@ mod tests {
         ] {
             assert!(!is_item_id(id), "{id} should be invalid");
         }
+    }
+
+    #[test]
+    fn test_item_from_uri() {
+        assert_eq!(
+            item_from_uri("http://www.wikidata.org/entity/Q42"),
+            Some("Q42")
+        );
+        assert_eq!(item_from_uri("Q42"), Some("Q42"));
+        assert_eq!(item_from_uri("http://www.wikidata.org/entity/P31"), None);
+        assert_eq!(item_from_uri("http://www.wikidata.org/entity/Q4}"), None);
     }
 
     #[test]

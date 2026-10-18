@@ -2,6 +2,7 @@
 name = "wd-infernal"
 version = "0.1.0"
 edition = "2024"
+repository = "https://github.com/magnusmanske/wd-infernal"
 
 [dependencies]
 # Returns freed memory to the OS; see the global allocator in src/main.rs.
@@ -37,6 +38,7 @@ wikibase_rest_api = "0.1"
 wikimisc = { git = "https://github.com/magnusmanske/wikimisc", features = [
 	"database",
 	"site-matrix",
+	"sparql-client",
 	"telemetry"]
 }
 tools_interface = "0.1"

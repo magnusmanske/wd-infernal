@@ -1,7 +1,6 @@
 use crate::wikidata::Wikidata;
 use anyhow::{Result, anyhow};
 use axum::http::StatusCode;
-use mediawiki::Api;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -19,8 +18,7 @@ impl GivenNames {
         if let Some(given_names) = ONCE.get() {
             return Ok(given_names);
         }
-        let api = Wikidata::get_wikidata_api().await?;
-        let given_names = GivenNames::new(&api)
+        let given_names = GivenNames::new()
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         Ok(ONCE.get_or_init(|| given_names))
@@ -60,14 +58,17 @@ impl GivenNames {
             .collect()
     }
 
-    async fn new(api: &Api) -> Result<Self> {
-        // Load all male and female given names from SPARQL
-        let sparql = "SELECT ?q ?qLabel ?gender {
-        	VALUES ?gender { wd:Q11879590 wd:Q12308941 } .
-         	?q wdt:P31 ?gender .
-          	SERVICE wikibase:label { bd:serviceParam wikibase:language \"[AUTO_LANGUAGE],en,mul\" }
-           }";
-        let json = api.sparql_query(sparql).await?;
+    async fn new() -> Result<Self> {
+        // Load all male and female given names, by their English and
+        // multilingual labels.
+        let sparql = r#"SELECT DISTINCT ?q (STR(?label) AS ?qLabel) ?gender {
+          VALUES ?gender { wd:Q11879590 wd:Q12308941 }
+          ?q wdt:P31 ?gender ; rdfs:label ?label .
+          FILTER(LANG(?label) IN ("en", "mul"))
+        }"#;
+        let json = Wikidata::sparql_json(sparql)
+            .await
+            .map_err(|status| anyhow!("SPARQL query failed: {status}"))?;
         let bindings = json["results"]["bindings"]
             .as_array()
             .ok_or(anyhow!("results.bindings are not an array"))?;
