@@ -1,6 +1,9 @@
 use axum::http::StatusCode;
 use futures::future::join_all;
+use futures::stream::{self, StreamExt};
+use mediawiki::Api;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use std::{
     collections::HashMap,
     sync::{Arc, LazyLock},
@@ -8,13 +11,17 @@ use std::{
 use tokio::sync::OnceCell;
 use tools_interface::{PetScan, Tool};
 use url::Url;
-use wikibase::mediawiki::api::Api;
 use wikibase_rest_api::prelude::*;
 use wikimisc::site_matrix::SiteMatrix;
 
 /// Loaded on first use. A failed load is retried by the next request, rather
 /// than poisoning the cell for the rest of the process lifetime.
 static SITE_MATRIX: OnceCell<SiteMatrix> = OnceCell::const_new();
+
+/// The most IDs `wbgetentities` accepts per request.
+const WBGETENTITIES_MAX_IDS: usize = 50;
+/// Parallel API requests per cross-categories query; keeps us a polite client.
+const MAX_CONCURRENT_REQUESTS: usize = 4;
 
 static REST_API: LazyLock<Arc<RestApi>> =
     LazyLock::new(|| Arc::new(RestApi::wikidata().expect("Could not create RestApi")));
@@ -74,7 +81,7 @@ impl CrossCats {
         }
 
         Self::remove_local_page_already_in_category(target_language_index, results, &mut item_info);
-        Self::get_local_pages(target_wiki, items, &mut item_info).await?;
+        Self::get_local_pages(&target_wiki, &mut item_info).await?;
 
         // Remove non-local items, and those already in the category
         item_info.retain(|_, v| v.local_page.is_some());
@@ -175,49 +182,99 @@ impl CrossCats {
         Ok(items)
     }
 
+    /// Sets `local_page` for items with a non-disambiguation page on `target_wiki`.
     async fn get_local_pages(
-        target_wiki: String,
-        items: Vec<String>,
+        target_wiki: &str,
         item_info: &mut HashMap<String, ItemInfo>,
     ) -> Result<(), StatusCode> {
-        let ids_str = items.join("|");
         let api = Api::new("https://www.wikidata.org/w/api.php")
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        let params: HashMap<String, String> = [
-            ("action".to_string(), "wbgetentities".to_string()),
-            ("ids".to_string(), ids_str),
-            ("props".to_string(), "sitelinks|claims".to_string()),
-            ("format".to_string(), "json".to_string()),
-        ]
-        .into();
-        let json = api
-            .get_query_api_json(&params)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        let entities = &json["entities"];
+            .map_err(|e| Self::upstream_error("Wikidata API", e))?;
 
-        for (qid, entity) in entities.as_object().iter().flat_map(|o| o.iter()) {
-            // Skip disambiguation pages (P31 = Q4167410)
-            if let Some(claims) = entity["claims"]["P31"].as_array() {
-                let is_disambiguation = claims.iter().any(|claim| {
-                    claim["mainsnak"]["datavalue"]["value"]["id"]
-                        .as_str()
-                        .is_some_and(|id| id == "Q4167410")
-                });
-                if is_disambiguation {
-                    continue;
-                }
+        // Items already in the target category are dropped anyway
+        let candidates: Vec<&str> = item_info
+            .iter()
+            .filter(|(qid, info)| !info.already_in_category && crate::wikidata::is_item_id(qid))
+            .map(|(qid, _)| qid.as_str())
+            .collect();
+        let entities = Self::get_entities(
+            &api,
+            &candidates,
+            &[("props", "sitelinks"), ("sitefilter", target_wiki)],
+        )
+        .await?;
+        let local_pages: HashMap<&str, &str> = entities
+            .iter()
+            .filter_map(|(qid, entity)| {
+                Some((
+                    qid.as_str(),
+                    entity["sitelinks"][target_wiki]["title"].as_str()?,
+                ))
+            })
+            .collect();
+
+        // Full claims are large, so only fetch them for items with a local page
+        let with_local_page: Vec<&str> = local_pages.keys().copied().collect();
+        let claims = Self::get_entities(&api, &with_local_page, &[("props", "claims")]).await?;
+
+        for (qid, title) in local_pages {
+            if Self::is_disambiguation(&claims[qid]) {
+                continue;
             }
-
-            // Extract sitelink for target wiki
-            if let Some(title) = entity["sitelinks"][&target_wiki]["title"].as_str() {
-                if let Some(info) = item_info.get_mut(qid) {
-                    info.local_page = Some(title.to_string());
-                }
+            if let Some(info) = item_info.get_mut(qid) {
+                info.local_page = Some(title.to_string());
             }
         }
         Ok(())
+    }
+
+    /// Fetches entities via `wbgetentities`, in batches of the 50 IDs it allows.
+    async fn get_entities(
+        api: &Api,
+        ids: &[&str],
+        params: &[(&str, &str)],
+    ) -> Result<Map<String, Value>, StatusCode> {
+        let batches: Vec<HashMap<String, String>> = ids
+            .chunks(WBGETENTITIES_MAX_IDS)
+            .map(|batch| {
+                params
+                    .iter()
+                    .chain(&[("action", "wbgetentities"), ("format", "json")])
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .chain([("ids".to_string(), batch.join("|"))])
+                    .collect()
+            })
+            .collect();
+        let responses: Vec<_> = stream::iter(batches)
+            .map(|batch| async move { api.get_query_api_json(&batch).await })
+            .buffer_unordered(MAX_CONCURRENT_REQUESTS)
+            .collect()
+            .await;
+
+        let mut entities = Map::new();
+        for response in responses {
+            let mut json = response.map_err(|e| Self::upstream_error("wbgetentities", e))?;
+            if !json["error"].is_null() {
+                return Err(Self::upstream_error("wbgetentities", &json["error"]));
+            }
+            if let Value::Object(batch) = json["entities"].take() {
+                entities.extend(batch);
+            }
+        }
+        Ok(entities)
+    }
+
+    fn is_disambiguation(entity: &Value) -> bool {
+        entity["claims"]["P31"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|claim| claim["mainsnak"]["datavalue"]["value"]["id"] == "Q4167410")
+    }
+
+    fn upstream_error(source: &str, error: impl std::fmt::Display) -> StatusCode {
+        tracing::error!("cross_cats: {source} failed: {error}");
+        StatusCode::BAD_GATEWAY
     }
 
     fn remove_local_page_already_in_category(
@@ -235,5 +292,46 @@ impl CrossCats {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn entity_with_p31(classes: &[&str]) -> Value {
+        let claims: Vec<Value> = classes
+            .iter()
+            .map(|q| json!({"mainsnak": {"datavalue": {"value": {"id": q}}}}))
+            .collect();
+        json!({"claims": {"P31": claims}})
+    }
+
+    #[test]
+    fn test_is_disambiguation() {
+        assert!(CrossCats::is_disambiguation(&entity_with_p31(&[
+            "Q4167410"
+        ])));
+        assert!(CrossCats::is_disambiguation(&entity_with_p31(&[
+            "Q5", "Q4167410"
+        ])));
+        assert!(!CrossCats::is_disambiguation(&entity_with_p31(&["Q5"])));
+        assert!(!CrossCats::is_disambiguation(&json!({"claims": {}})));
+        assert!(
+            !CrossCats::is_disambiguation(&Value::Null),
+            "missing entity"
+        );
+    }
+
+    #[test]
+    fn test_remove_local_page_already_in_category() {
+        let mut item_info: HashMap<String, ItemInfo> = ["Q1", "Q2"]
+            .map(|q| (q.to_string(), ItemInfo::default()))
+            .into();
+        let results = vec![Ok(vec!["Q1".to_string()]), Ok(vec!["Q2".to_string()])];
+        CrossCats::remove_local_page_already_in_category(Some(1), results, &mut item_info);
+        assert!(!item_info["Q1"].already_in_category);
+        assert!(item_info["Q2"].already_in_category);
     }
 }
