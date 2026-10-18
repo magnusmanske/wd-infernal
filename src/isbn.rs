@@ -1,14 +1,27 @@
 use crate::google_books::GoogleBooksFeed;
+use crate::open_library::OpenLibraryEdition;
 use crate::reference::{DataValue, Reference};
 use anyhow::{Result, anyhow};
 use grscraper::MetadataRequestBuilder;
 use isbn::{Isbn10, Isbn13};
 use regex::Regex;
+use reqwest::Client;
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 use wikibase_rest_api::prelude::*;
 
 static RE_GOODREADS_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"/(\d+)\.jpg$").unwrap());
+/// Shared by the ISBN metadata sources.
+pub(crate) static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(|| {
+    Client::builder()
+        .user_agent(
+            "WikidataInfernal/0.1 (https://wd-infernal.toolforge.org/; mailto:magnusmanske@toolforge.org)",
+        )
+        .timeout(std::time::Duration::from_secs(30))
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .build()
+        .expect("Failed to build ISBN HTTP client")
+});
 static LANGUAGE_LABELS: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
     let json_string = include_str!("../static/languages.json");
     serde_json::from_str(json_string).unwrap()
@@ -95,14 +108,27 @@ impl ISBN2wiki {
         }
     }
 
+    /// The ISBN as returned by `isbn()`, without hyphens, for source queries.
+    pub fn isbn_digits(&self) -> Result<String> {
+        Ok(self
+            .isbn()
+            .ok_or_else(|| anyhow!("No ISBN found"))?
+            .replace('-', ""))
+    }
+
     /// Queries all sources. Succeeds if at least one of them did, so that one
     /// source lacking the book (or being down) does not discard the others' data.
     pub async fn retrieve(&mut self) -> Result<()> {
-        let (goodreads, google_books) = futures::join!(
+        let (goodreads, google_books, open_library) = futures::join!(
             self.load_from_goodreads(),
             GoogleBooksFeed::load_from_google_books(self),
+            OpenLibraryEdition::load(self),
         );
-        Self::any_source_succeeded([("Goodreads", goodreads), ("Google Books", google_books)])
+        Self::any_source_succeeded([
+            ("Goodreads", goodreads),
+            ("Google Books", google_books),
+            ("Open Library", open_library),
+        ])
     }
 
     fn any_source_succeeded<const N: usize>(results: [(&str, Result<()>); N]) -> Result<()> {
@@ -121,10 +147,7 @@ impl ISBN2wiki {
     }
 
     async fn load_from_goodreads(&self) -> Result<()> {
-        let isbn = self
-            .isbn()
-            .ok_or_else(|| anyhow!("No ISBN found"))?
-            .replace('-', "");
+        let isbn = self.isbn_digits()?;
         let metadata = MetadataRequestBuilder::default()
             .with_isbn(&isbn)
             .execute()

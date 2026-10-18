@@ -59,6 +59,7 @@ pub mod google_books;
 pub mod initial_search;
 pub mod isbn;
 pub mod location;
+pub mod open_library;
 pub mod person;
 pub mod referee;
 pub mod reference;

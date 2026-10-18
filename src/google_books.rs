@@ -1,9 +1,8 @@
-use crate::isbn::ISBN2wiki;
+use crate::isbn::{HTTP_CLIENT, ISBN2wiki};
 use crate::reference::{DataValue, Reference};
 use anyhow::{Result, anyhow};
 use isbn::Isbn;
 use regex::Regex;
-use reqwest::Client;
 use serde::Deserialize;
 use std::str::FromStr;
 use std::sync::LazyLock;
@@ -19,16 +18,6 @@ static RE_ISBN_10: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^ISBN:([0-9]{9}[0-9X])$").unwrap());
 static RE_ISBN_13: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^ISBN:([0-9]{12}[0-9X])$").unwrap());
-static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(|| {
-    Client::builder()
-        .user_agent(
-            "WikidataInfernal/0.1 (https://wd-infernal.toolforge.org/; mailto:magnusmanske@toolforge.org)",
-        )
-        .timeout(std::time::Duration::from_secs(30))
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .build()
-        .expect("Failed to build Google Books HTTP client")
-});
 
 #[derive(Debug, Deserialize, PartialEq)]
 struct GoogleBooksEntry {
@@ -55,10 +44,7 @@ pub struct GoogleBooksFeed {
 
 impl GoogleBooksFeed {
     pub async fn load_from_google_books(isbn2wiki: &ISBN2wiki) -> Result<()> {
-        let isbn = isbn2wiki
-            .isbn()
-            .ok_or_else(|| anyhow!("No ISBN found"))?
-            .replace('-', "");
+        let isbn = isbn2wiki.isbn_digits()?;
         let url =
             format!("https://books.google.com/books/feeds/volumes?q=isbn:{isbn}&max-results=25");
 

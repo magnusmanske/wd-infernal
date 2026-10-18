@@ -1,0 +1,33 @@
+{
+  "key": "/books/OL23140636M",
+  "title": "Crime and punishment",
+  "publish_date": "2003",
+  "publishers": [
+    "Penguin"
+  ],
+  "number_of_pages": 671,
+  "languages": [
+    {
+      "key": "/languages/eng"
+    }
+  ],
+  "identifiers": {
+    "librarything": [
+      "10072"
+    ],
+    "goodreads": [
+      "181309"
+    ]
+  },
+  "isbn_10": [
+    "0140449132"
+  ],
+  "works": [
+    {
+      "key": "/works/OL166894W"
+    }
+  ],
+  "type": {
+    "key": "/type/edition"
+  }
+}
