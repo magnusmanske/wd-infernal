@@ -101,6 +101,10 @@ impl OpenLibraryEdition {
             add("P2969", DataValue::String(id.to_owned()));
         }
 
+        for item_id in self.identifiers.get("wikidata").into_iter().flatten() {
+            isbn2wiki.add_existing_item(item_id);
+        }
+
         Ok(())
     }
 
@@ -179,6 +183,20 @@ mod tests {
                 precision: TimePrecision::Year,
             }]
         );
+    }
+
+    #[test]
+    fn test_add_to_records_valid_existing_items() {
+        let edition = OpenLibraryEdition {
+            identifiers: HashMap::from([(
+                "wikidata".to_string(),
+                vec!["Q22137041".to_string(), "Q1 } ?x".to_string()],
+            )]),
+            ..fixture()
+        };
+        let isbn2wiki = ISBN2wiki::default();
+        edition.add_to(&isbn2wiki).unwrap();
+        assert_eq!(isbn2wiki.existing_items(), ["Q22137041"]);
     }
 
     #[test]

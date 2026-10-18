@@ -6,7 +6,7 @@ use grscraper::MetadataRequestBuilder;
 use isbn::{Isbn10, Isbn13};
 use regex::Regex;
 use reqwest::Client;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 use wikibase_rest_api::prelude::*;
 
@@ -35,6 +35,8 @@ pub struct ISBN2wiki {
     /// The item's current statements, when created from an item; patches are
     /// generated against these, so existing values get references, not duplicates.
     existing: Statements,
+    /// Wikidata items that sources say already represent this edition.
+    existing_items: Mutex<BTreeSet<String>>,
 }
 
 impl ISBN2wiki {
@@ -246,6 +248,24 @@ impl ISBN2wiki {
         }
 
         Ok(())
+    }
+
+    pub fn add_existing_item(&self, item_id: &str) {
+        if crate::wikidata::is_item_id(item_id) {
+            let mut items = self
+                .existing_items
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            items.insert(item_id.to_string());
+        }
+    }
+
+    pub fn existing_items(&self) -> Vec<String> {
+        let items = self
+            .existing_items
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        items.iter().cloned().collect()
     }
 
     pub fn add_reference(&self, property: &str, value: DataValue, reference: Reference) {

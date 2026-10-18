@@ -256,7 +256,11 @@ async fn cross_cats(
 #[utoipa::path(
     get,
     path = "/isbn/isbn/{isbn}",
-    responses((status = 200, description = "Generated Wikidata item"))
+    responses((
+        status = 200,
+        description = "Generated Wikidata item, and `existing_items`: Wikidata items that \
+            sources say already represent this edition, to check before creating a new one"
+    ))
 )]
 async fn isbn_isbn(Path(isbn): Path<String>) -> Result<impl IntoResponse, StatusCode> {
     tracing::info!("isbn_isbn: {isbn}");
@@ -272,7 +276,7 @@ async fn isbn_isbn(Path(isbn): Path<String>) -> Result<impl IntoResponse, Status
         tracing::warn!("isbn_isbn generate_item failed for {isbn}: {e}");
         StatusCode::NOT_FOUND
     })?;
-    let ret = json!({"item": ret});
+    let ret = json!({"item": ret, "existing_items": isbn2wiki.existing_items()});
     Ok(Json(ret))
 }
 
