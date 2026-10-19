@@ -6,6 +6,9 @@ use wikimisc::mysql_async::{Params, from_row, params, prelude::Queryable};
 
 static RE_INITIAL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b([A-Z])\b\.? *").unwrap());
 
+/// At most this many items are looked at, and returned.
+const MAX_RESULTS: usize = 500;
+
 /// Searches for items with a label that matches a human name with initials.
 #[derive(Debug, Copy, Clone)]
 pub struct InitialSearch;
@@ -14,20 +17,15 @@ impl InitialSearch {
     pub async fn run(query: &str) -> Result<Vec<String>> {
         let query = query.trim();
         let candidate_items = Self::get_candidate_items_from_term_store(query).await?;
-        let futures = candidate_items
-            .chunks(500)
-            .map(Self::filter_chunk)
-            .collect::<Vec<_>>();
-        let results = futures::future::try_join_all(futures)
-            .await?
-            .into_iter()
-            .flatten()
-            .collect();
-        Ok(results)
+        Self::filter_humans(&candidate_items).await
     }
 
-    async fn filter_chunk(chunk: &[String]) -> Result<Vec<String>> {
-        let placeholders: String = std::iter::repeat_n("?", chunk.len())
+    /// The `items` that are humans (P31:Q5).
+    async fn filter_humans(items: &[String]) -> Result<Vec<String>> {
+        if items.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders: String = std::iter::repeat_n("?", items.len())
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
@@ -37,11 +35,12 @@ impl InitialSearch {
 				AND page_namespace=0
 				AND pl_from=page_id
 				AND pl_target_id=lt_id
+				AND lt_namespace=0
 				AND lt_title='Q5'"#
         );
         let mut conn = database::wikidata().await?;
         let results = conn
-            .exec_iter(sql, chunk.to_vec())
+            .exec_iter(sql, items.to_vec())
             .await?
             .map_and_drop(from_row::<String>)
             .await?;
@@ -50,18 +49,21 @@ impl InitialSearch {
     }
 
     async fn get_candidate_items_from_term_store(query: &str) -> Result<Vec<String>> {
-        const BASE_SQL: &str = r#"SELECT DISTINCT concat('Q',`wbit_item_id`) AS `item`
+        let sql = format!(
+            r#"SELECT DISTINCT concat('Q',`wbit_item_id`) AS `item`
 	    	FROM `wbt_item_terms`,`wbt_term_in_lang`,`wbt_text_in_lang`
 	     	WHERE `wbit_term_in_lang_id`=`wbtl_id`
 	      	AND `wbtl_text_in_lang_id`=`wbxl_id`
 	       	AND `wbxl_text_id` IN (SELECT `wbx_id` FROM `wbt_text`
 	       		WHERE `wbx_text` LIKE :q1
 	         	AND `wbx_text` RLIKE :q2
-	        )"#;
+	        )
+	        LIMIT {MAX_RESULTS}"#
+        );
         let params = Self::generate_query_parameters(query);
         let mut conn = database::termstore().await?;
         let results = conn
-            .exec_iter(BASE_SQL, params)
+            .exec_iter(sql, params)
             .await?
             .map_and_drop(from_row::<String>)
             .await?;
@@ -137,6 +139,9 @@ mod tests {
             assert_eq!(results[0], "Q13520818");
             // Only a literal "%", not every label
             assert!(InitialSearch::run("%").await.unwrap().is_empty());
+            // Far too many matches, cut off
+            let broad = InitialSearch::run("J. Smith").await.unwrap();
+            assert!(!broad.is_empty() && broad.len() <= MAX_RESULTS);
         });
     }
 }

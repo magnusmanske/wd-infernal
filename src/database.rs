@@ -29,8 +29,7 @@ const WIKIDATA: &str = "wikidatawiki";
 const POOL_MAX: usize = 4;
 
 /// An unreachable server fails a request after this, rather than hang it.
-/// Includes waiting for a free connection, e.g. while `InitialSearch` runs
-/// its queries in parallel, so it is generous.
+/// Includes waiting for a free connection, so it is generous.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A failure to set up the pools, e.g. without credentials, is kept as an

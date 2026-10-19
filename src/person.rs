@@ -225,6 +225,7 @@ impl Person {
                 AND `page_namespace` = 0
                 AND `pl_from` = `page_id`
                 AND `pl_target_id` = `lt_id`
+                AND `lt_namespace` = 0
                 AND `lt_title` IN ('{Q_MALE_NAME}', '{Q_FEMALE_NAME}', '{Q_UNISEX_NAME}', '{Q_GIVEN_NAME}', '{Q_FAMILY_NAME}')"#
         );
         let mut wd_conn = database::wikidata().await?;
