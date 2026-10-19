@@ -69,14 +69,35 @@ impl InitialSearch {
         Ok(results)
     }
 
+    /// The `LIKE` (`q1`) and `RLIKE` (`q2`) patterns for `query`, in which
+    /// each initial stands for a name starting with it. The rest of the query
+    /// is user input, and matched literally, so it can't widen the search
+    /// (e.g. `%`) or make the database run an expensive regular expression.
     fn generate_query_parameters(query: &str) -> Params {
-        let q1 = RE_INITIAL.replace_all(query, "$1%_").to_string(); // 'A%_A%_Saveliev'
-        let q2 = RE_INITIAL.replace_all(query, "$1.*? "); // '^A.*? A.*? Saveliev$'
-        let q2 = format!("^{q2}$");
+        let mut q1 = String::new(); // 'A%_A%_Saveliev'
+        let mut q2 = String::new(); // '^A.*? A.*? Saveliev$'
+        let mut rest = 0;
+        for caps in RE_INITIAL.captures_iter(query) {
+            let (initial, letter) = (caps.get(0).expect("whole match"), &caps[1]);
+            let literal = &query[rest..initial.start()];
+            q1 += &format!("{}{letter}%_", Self::escape_like(literal));
+            q2 += &format!("{}{letter}.*? ", regex::escape(literal));
+            rest = initial.end();
+        }
+        let literal = &query[rest..];
+        q1 += &Self::escape_like(literal);
+        let q2 = format!("^{q2}{}$", regex::escape(literal));
         params! {
             "q1" => q1,
             "q2" => q2,
         }
+    }
+
+    /// `text` as a `LIKE` pattern matching only itself.
+    fn escape_like(text: &str) -> String {
+        text.replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
     }
 }
 
@@ -96,6 +117,17 @@ mod tests {
     }
 
     #[test]
+    fn test_generate_query_parameters_escapes_user_input() {
+        for (query, q1, q2) in [
+            ("%", r"\%", "^%$"),
+            (r"J. St_\(x)", r"J%_St\_\\(x)", r"^J.*? St_\\\(x\)$"),
+        ] {
+            let expected = params! { "q1" => q1, "q2" => q2 };
+            assert_eq!(InitialSearch::generate_query_parameters(query), expected);
+        }
+    }
+
+    #[test]
     #[ignore = "needs the databases, see run_live_tests.sh"]
     fn test_initial_search() {
         database::block_on(async {
@@ -103,6 +135,8 @@ mod tests {
             let results = InitialSearch::run(query).await.unwrap();
             assert_eq!(results.len(), 1);
             assert_eq!(results[0], "Q13520818");
+            // Only a literal "%", not every label
+            assert!(InitialSearch::run("%").await.unwrap().is_empty());
         });
     }
 }
