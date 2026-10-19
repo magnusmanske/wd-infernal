@@ -401,9 +401,10 @@ impl Server {
         tracing_subscriber::fmt::init();
         crate::metrics::start_telemetry();
 
-        // A broken DB config must stop the server here: on first use, its panic
-        // would poison `TOOLFORGE_DB` and fail every later DB request instead.
-        std::sync::LazyLock::force(&crate::TOOLFORGE_DB);
+        // Most endpoints work without the databases, e.g. locally.
+        if let Err(e) = crate::database::check() {
+            tracing::error!("{e:#}");
+        }
 
         // Initialize the shared Referee (fetches siteinfo from Wikidata) before accepting requests.
         tracing::info!("initializing Referee...");

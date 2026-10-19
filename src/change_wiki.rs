@@ -1,4 +1,4 @@
-use crate::TOOLFORGE_DB;
+use crate::database;
 use anyhow::Result;
 use std::collections::HashMap;
 use wikimisc::mysql_async::{from_row, prelude::Queryable};
@@ -46,7 +46,7 @@ impl ChangeWiki {
     }
 
     async fn wd2site(&self, wiki_to: &str) -> Result<HashMap<String, String>> {
-        let mut conn = TOOLFORGE_DB.get_connection("wikidata").await?;
+        let mut conn = database::wikidata().await?;
         let mut ret: HashMap<String, String> = HashMap::new();
         for chunk in self.titles.chunks(5000) {
             let item_ids: Vec<&str> = chunk.iter().filter_map(|t| Self::item_number(t)).collect();
@@ -76,7 +76,7 @@ impl ChangeWiki {
 
     async fn site2wd(&self) -> Result<HashMap<String, String>> {
         let wiki_from = &self.wiki_from;
-        let mut conn = TOOLFORGE_DB.get_connection("wikidata").await?;
+        let mut conn = database::wikidata().await?;
         let mut ret: HashMap<String, String> = HashMap::new();
         for chunk in self.titles.chunks(5000) {
             let titles: Vec<String> = chunk.iter().map(|t| t.replace('_', " ")).collect();
@@ -131,32 +131,26 @@ mod tests {
         }
     }
 
-    async fn check_db_connection() -> bool {
-        TOOLFORGE_DB.get_connection("termstore").await.is_ok()
+    #[test]
+    #[ignore = "needs the databases, see run_live_tests.sh"]
+    fn test_wd2site() {
+        database::block_on(async {
+            let change_wiki = ChangeWiki::new("wikidatawiki", vec!["Q13520818".to_string()]);
+            let result = change_wiki.wd2site("enwiki").await.unwrap();
+            assert_eq!(result.len(), 1);
+            assert_eq!(result.get("Q13520818").unwrap(), "Magnus Manske");
+        });
     }
 
-    #[tokio::test]
-    async fn test_wd2site() {
-        if !check_db_connection().await {
-            // No DB connection
-            return;
-        }
-        let change_wiki = ChangeWiki::new("wikidatawiki", vec!["Q13520818".to_string()]);
-        let result = change_wiki.wd2site("enwiki").await.unwrap();
-        assert_eq!(result.len(), 1);
-        assert_eq!(result.get("Q13520818").unwrap(), "Magnus Manske");
-    }
-
-    #[tokio::test]
-    async fn test_site2wd() {
-        if !check_db_connection().await {
-            // No DB connection
-            return;
-        }
-        let change_wiki = ChangeWiki::new("enwiki", vec!["Magnus_Manske".to_string()]);
-        let result = change_wiki.site2wd().await.unwrap();
-        assert_eq!(result.len(), 1);
-        assert_eq!(result.get("Magnus Manske").unwrap(), "Q13520818");
+    #[test]
+    #[ignore = "needs the databases, see run_live_tests.sh"]
+    fn test_site2wd() {
+        database::block_on(async {
+            let change_wiki = ChangeWiki::new("enwiki", vec!["Magnus_Manske".to_string()]);
+            let result = change_wiki.site2wd().await.unwrap();
+            assert_eq!(result.len(), 1);
+            assert_eq!(result.get("Magnus Manske").unwrap(), "Q13520818");
+        });
     }
 
     // ── normalize_wiki ────────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-use crate::TOOLFORGE_DB;
+use crate::database;
 use anyhow::Result;
 use regex::Regex;
 use std::sync::LazyLock;
@@ -39,7 +39,7 @@ impl InitialSearch {
 				AND pl_target_id=lt_id
 				AND lt_title='Q5'"#
         );
-        let mut conn = TOOLFORGE_DB.get_connection("wikidata").await?;
+        let mut conn = database::wikidata().await?;
         let results = conn
             .exec_iter(sql, chunk.to_vec())
             .await?
@@ -59,7 +59,7 @@ impl InitialSearch {
 	         	AND `wbx_text` RLIKE :q2
 	        )"#;
         let params = Self::generate_query_parameters(query);
-        let mut conn = TOOLFORGE_DB.get_connection("termstore").await?;
+        let mut conn = database::termstore().await?;
         let results = conn
             .exec_iter(BASE_SQL, params)
             .await?
@@ -84,10 +84,6 @@ impl InitialSearch {
 mod tests {
     use super::*;
 
-    async fn check_db_connection() -> bool {
-        TOOLFORGE_DB.get_connection("termstore").await.is_ok()
-    }
-
     #[test]
     fn test_generate_query_parameters() {
         let query = "A.A.Saveliev";
@@ -99,18 +95,14 @@ mod tests {
         assert_eq!(params, expected);
     }
 
-    #[tokio::test]
-    async fn test_initial_search() {
-        if !check_db_connection().await {
-            // No DB connection
-            return;
-        }
-        let query = "H.M.Manske";
-        let results = match InitialSearch::run(query).await {
-            Ok(r) => r,
-            Err(_) => return, // DB pool disconnected under concurrent test load; skip
-        };
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0], "Q13520818");
+    #[test]
+    #[ignore = "needs the databases, see run_live_tests.sh"]
+    fn test_initial_search() {
+        database::block_on(async {
+            let query = "H.M.Manske";
+            let results = InitialSearch::run(query).await.unwrap();
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0], "Q13520818");
+        });
     }
 }

@@ -3,3 +3,4 @@ Cargo.lock
 config.json
 TODO.md
 AGENTS.md
+replica.my.cnf

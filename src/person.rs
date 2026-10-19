@@ -1,4 +1,4 @@
-use crate::TOOLFORGE_DB;
+use crate::database;
 use crate::wikidata::Wikidata;
 use axum::http::StatusCode;
 use futures::future::join_all;
@@ -175,9 +175,9 @@ impl Person {
     }
 
     /// Fetch name items for `tokens` directly from the Toolforge replicas.
-    /// Two sequential queries are needed because the term-store and the
-    /// Wikidata replica run on different `MySQL` servers (ports 3309 / 3317),
-    /// making a cross-server SQL JOIN impossible. The second query only
+    /// Two sequential queries are needed because the term store and the
+    /// Wikidata replica run on different `MySQL` servers, making a
+    /// cross-server SQL JOIN impossible. The second query only
     /// sends the Q-IDs discovered in the first round, so data transfer is
     /// already minimised.
     async fn db_lookup(tokens: &[String]) -> anyhow::Result<NameHitMap> {
@@ -195,7 +195,7 @@ impl Person {
                 AND `wbit_term_in_lang_id` = `wbtl_id`
                 AND `wbtl_type_id` IN (1, 3)"#
         );
-        let mut conn = TOOLFORGE_DB.get_connection("termstore").await?;
+        let mut conn = database::termstore().await?;
         let rows: Vec<(Vec<u8>, u64, u32)> = conn
             .exec_iter(sql, tokens.to_vec())
             .await?
@@ -227,7 +227,7 @@ impl Person {
                 AND `pl_target_id` = `lt_id`
                 AND `lt_title` IN ('{Q_MALE_NAME}', '{Q_FEMALE_NAME}', '{Q_UNISEX_NAME}', '{Q_GIVEN_NAME}', '{Q_FAMILY_NAME}')"#
         );
-        let mut wd_conn = TOOLFORGE_DB.get_connection("wikidata").await?;
+        let mut wd_conn = database::wikidata().await?;
         let class_rows: Vec<(String, String)> = wd_conn
             .exec_iter(class_sql, qids)
             .await?
@@ -492,9 +492,8 @@ mod tests {
     use super::*;
     use tokio::sync::Mutex;
 
-    /// Serializes the live-network tests. They share a small connection pool
-    /// (and, locally, an SSH tunnel that drops connections under concurrent
-    /// load), so running them one at a time keeps them reliable.
+    /// Serializes the live-network tests, which share small connection pools
+    /// and query the Wikidata API.
     static NET_TEST_LOCK: Mutex<()> = Mutex::const_new(());
 
     /// Helper: extract the item value (Q-id) from a statement's main snak
@@ -515,42 +514,60 @@ mod tests {
             .collect()
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore]
-    async fn test_name_gender_male() {
-        let _guard = NET_TEST_LOCK.lock().await;
-        // "Heinrich Magnus Manske" — male given names + last name + gender.
-        let results = Person::name_gender("Heinrich Magnus Manske").await.unwrap();
-        if results.is_empty() {
-            return; // No DB and no API connectivity; cannot test offline.
-        }
-        // Gender should be male.
-        assert_eq!(
-            property_values(&results, "P21"),
-            vec!["Q6581097".to_string()],
-            "expected exactly one male gender statement"
-        );
-        // Given names should be present.
-        assert!(
-            !property_values(&results, "P735").is_empty(),
-            "expected at least one given name statement"
-        );
+    fn test_name_gender_male() {
+        database::block_on(async {
+            let _guard = NET_TEST_LOCK.lock().await;
+            // "Heinrich Magnus Manske" — male given names + last name + gender.
+            let results = Person::name_gender("Heinrich Magnus Manske").await.unwrap();
+            if results.is_empty() {
+                return; // No DB and no API connectivity; cannot test offline.
+            }
+            // Gender should be male.
+            assert_eq!(
+                property_values(&results, "P21"),
+                vec!["Q6581097".to_string()],
+                "expected exactly one male gender statement"
+            );
+            // Given names should be present.
+            assert!(
+                !property_values(&results, "P735").is_empty(),
+                "expected at least one given name statement"
+            );
+        });
     }
 
-    #[tokio::test]
+    /// `name_gender` falls back to the API when the databases fail, so the
+    /// database lookup gets a test of its own.
+    #[test]
+    #[ignore = "needs the databases, see run_live_tests.sh"]
+    fn test_db_lookup() {
+        database::block_on(async {
+            let hits = Person::db_lookup(&["Heinrich".to_string()]).await.unwrap();
+            assert!(
+                hits["Heinrich"].iter().any(|hit| hit.classes & MALE != 0),
+                "{hits:?}"
+            );
+        });
+    }
+
+    #[test]
     #[ignore]
-    async fn test_name_gender_female() {
-        let _guard = NET_TEST_LOCK.lock().await;
-        // "Elisabeth Manske" — a clearly female first name.
-        let results = Person::name_gender("Elisabeth Manske").await.unwrap();
-        if results.is_empty() {
-            return;
-        }
-        assert_eq!(
-            property_values(&results, "P21"),
-            vec!["Q6581072".to_string()],
-            "expected exactly one female gender statement"
-        );
+    fn test_name_gender_female() {
+        database::block_on(async {
+            let _guard = NET_TEST_LOCK.lock().await;
+            // "Elisabeth Manske" — a clearly female first name.
+            let results = Person::name_gender("Elisabeth Manske").await.unwrap();
+            if results.is_empty() {
+                return;
+            }
+            assert_eq!(
+                property_values(&results, "P21"),
+                vec!["Q6581072".to_string()],
+                "expected exactly one female gender statement"
+            );
+        });
     }
 
     fn split(name: &str) -> (Vec<&str>, String) {
@@ -619,43 +636,47 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore]
-    async fn test_name_gender_particle_surname() {
-        let _guard = NET_TEST_LOCK.lock().await;
-        // "Ludwig van Beethoven" — male, and "van" must not be a given name.
-        let results = Person::name_gender("Ludwig van Beethoven").await.unwrap();
-        if results.is_empty() {
-            return;
-        }
-        assert_eq!(
-            property_values(&results, "P21"),
-            vec!["Q6581097".to_string()],
-            "expected male gender"
-        );
-        // No given-name statement should be the particle's item; at most one
-        // given name ("Ludwig") is expected.
-        assert!(
-            property_values(&results, "P735").len() <= 1,
-            "particle should not produce extra given-name statements"
-        );
+    fn test_name_gender_particle_surname() {
+        database::block_on(async {
+            let _guard = NET_TEST_LOCK.lock().await;
+            // "Ludwig van Beethoven" — male, and "van" must not be a given name.
+            let results = Person::name_gender("Ludwig van Beethoven").await.unwrap();
+            if results.is_empty() {
+                return;
+            }
+            assert_eq!(
+                property_values(&results, "P21"),
+                vec!["Q6581097".to_string()],
+                "expected male gender"
+            );
+            // No given-name statement should be the particle's item; at most one
+            // given name ("Ludwig") is expected.
+            assert!(
+                property_values(&results, "P735").len() <= 1,
+                "particle should not produce extra given-name statements"
+            );
+        });
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore]
-    async fn test_name_gender_cross_gender_middle_name() {
-        let _guard = NET_TEST_LOCK.lock().await;
-        // "Rainer Maria Rilke" — "Maria" is also a male given name, but as a
-        // middle name it must not neutralize the leading male name "Rainer".
-        let results = Person::name_gender("Rainer Maria Rilke").await.unwrap();
-        if results.is_empty() {
-            return;
-        }
-        assert_eq!(
-            property_values(&results, "P21"),
-            vec!["Q6581097".to_string()],
-            "leading male given name should decide the gender"
-        );
+    fn test_name_gender_cross_gender_middle_name() {
+        database::block_on(async {
+            let _guard = NET_TEST_LOCK.lock().await;
+            // "Rainer Maria Rilke" — "Maria" is also a male given name, but as a
+            // middle name it must not neutralize the leading male name "Rainer".
+            let results = Person::name_gender("Rainer Maria Rilke").await.unwrap();
+            if results.is_empty() {
+                return;
+            }
+            assert_eq!(
+                property_values(&results, "P21"),
+                vec!["Q6581097".to_string()],
+                "leading male given name should decide the gender"
+            );
+        });
     }
 
     #[tokio::test]
@@ -668,48 +689,54 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore]
-    async fn test_name_gender_single_word() {
-        let _guard = NET_TEST_LOCK.lock().await;
-        // Single word is treated as last name only, no first names → no gender.
-        let results = Person::name_gender("Manske").await.unwrap();
-        assert!(
-            property_values(&results, "P21").is_empty(),
-            "single-word name should not produce a gender statement"
-        );
+    fn test_name_gender_single_word() {
+        database::block_on(async {
+            let _guard = NET_TEST_LOCK.lock().await;
+            // Single word is treated as last name only, no first names → no gender.
+            let results = Person::name_gender("Manske").await.unwrap();
+            assert!(
+                property_values(&results, "P21").is_empty(),
+                "single-word name should not produce a gender statement"
+            );
+        });
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore]
-    async fn test_name_gender_references() {
-        let _guard = NET_TEST_LOCK.lock().await;
-        // Every statement must carry a reference containing the infernal snak (P887).
-        let results = Person::name_gender("Heinrich Manske").await.unwrap();
-        if results.is_empty() {
-            return;
-        }
-        for statement in &results {
-            let refs = statement.references();
-            assert!(!refs.is_empty(), "every statement should have a reference");
-            let has_infernal = refs
-                .iter()
-                .any(|r| r.snaks().iter().any(|sn| sn.property() == "P887"));
-            assert!(has_infernal, "every reference should contain P887");
-        }
+    fn test_name_gender_references() {
+        database::block_on(async {
+            let _guard = NET_TEST_LOCK.lock().await;
+            // Every statement must carry a reference containing the infernal snak (P887).
+            let results = Person::name_gender("Heinrich Manske").await.unwrap();
+            if results.is_empty() {
+                return;
+            }
+            for statement in &results {
+                let refs = statement.references();
+                assert!(!refs.is_empty(), "every statement should have a reference");
+                let has_infernal = refs
+                    .iter()
+                    .any(|r| r.snaks().iter().any(|sn| sn.property() == "P887"));
+                assert!(has_infernal, "every reference should contain P887");
+            }
+        });
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore]
-    async fn test_name_gender_consistent_calls() {
-        let _guard = NET_TEST_LOCK.lock().await;
-        // Calling twice with the same input should yield the same result.
-        let r1 = Person::name_gender("Heinrich Manske").await.unwrap();
-        let r2 = Person::name_gender("Heinrich Manske").await.unwrap();
-        assert_eq!(r1.len(), r2.len(), "repeated calls should match");
-        for (a, b) in r1.iter().zip(r2.iter()) {
-            assert_eq!(a.main_snak().property(), b.main_snak().property());
-            assert_eq!(snak_item_value(a), snak_item_value(b));
-        }
+    fn test_name_gender_consistent_calls() {
+        database::block_on(async {
+            let _guard = NET_TEST_LOCK.lock().await;
+            // Calling twice with the same input should yield the same result.
+            let r1 = Person::name_gender("Heinrich Manske").await.unwrap();
+            let r2 = Person::name_gender("Heinrich Manske").await.unwrap();
+            assert_eq!(r1.len(), r2.len(), "repeated calls should match");
+            for (a, b) in r1.iter().zip(r2.iter()) {
+                assert_eq!(a.main_snak().property(), b.main_snak().property());
+                assert_eq!(snak_item_value(a), snak_item_value(b));
+            }
+        });
     }
 }

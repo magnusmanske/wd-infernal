@@ -48,22 +48,21 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 use serde_json::json;
 use std::fs::File;
-use std::sync::LazyLock;
 use wikibase_rest_api::Patch as _;
-use wikimisc::toolforge_db::ToolforgeDB;
 
 pub mod change_wiki;
 pub mod crosscats;
+pub mod database;
 pub mod given_names;
 pub mod google_books;
 pub mod initial_search;
 pub mod isbn;
 pub mod location;
+pub mod metrics;
 pub mod open_library;
 pub mod person;
 pub mod referee;
 pub mod reference;
-pub mod metrics;
 pub mod server;
 pub mod viaf;
 pub mod wikidata;
@@ -77,21 +76,6 @@ pub fn load_config() -> serde_json::Result<Option<serde_json::Value>> {
     };
     serde_json::from_reader(std::io::BufReader::new(file)).map(Some)
 }
-
-pub static TOOLFORGE_DB: LazyLock<ToolforgeDB> = LazyLock::new(|| {
-    /* For local testing:
-    ssh magnus@login.toolforge.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
-    ssh magnus@login.toolforge.org -L 3317:termstore.wikidatawiki.analytics.db.svc.wikimedia.cloud:3306 -N &
-     */
-
-    let mut ret = ToolforgeDB::default();
-    if let Some(config) = load_config().unwrap() {
-        ret.add_mysql_pool("wikidata", &config["wikidata"]).unwrap();
-        ret.add_mysql_pool("termstore", &config["termstore"])
-            .unwrap();
-    }
-    ret
-});
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
