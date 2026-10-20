@@ -7,7 +7,6 @@ use regex::Regex;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::LazyLock;
-use wikibase_rest_api::prelude::*;
 
 // Values are validated before being proposed as Wikidata statements.
 // `[0-9]`, not `\d`, which also matches non-ASCII digits.
@@ -86,14 +85,8 @@ impl OpenLibraryEdition {
             .publish_date
             .as_deref()
             .and_then(|date| Some(RE_YEAR.captures(date.trim())?.get(1)?.as_str().to_string()));
-        if let Some(year) = year {
-            add(
-                "P577",
-                DataValue::Date {
-                    time: format!("+{year}-01-01T00:00:00Z"),
-                    precision: TimePrecision::Year,
-                },
-            );
+        if let Some(year) = year.and_then(|year| DataValue::year(&year)) {
+            add("P577", year);
         }
 
         let goodreads_ids = self.identifiers.get("goodreads").into_iter().flatten();
@@ -147,6 +140,7 @@ impl OpenLibraryEdition {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wikibase_rest_api::prelude::TimePrecision;
 
     fn fixture() -> OpenLibraryEdition {
         serde_json::from_str(include_str!("../test_files/open_library.json")).unwrap()
@@ -179,7 +173,7 @@ mod tests {
         assert_eq!(
             values["P577"],
             vec![DataValue::Date {
-                time: "+2003-01-01T00:00:00Z".to_string(),
+                time: "+2003-00-00T00:00:00Z".to_string(),
                 precision: TimePrecision::Year,
             }]
         );

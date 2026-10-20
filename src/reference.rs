@@ -1,5 +1,6 @@
 use wikibase_rest_api::prelude::*;
 use wikibase_rest_api::property_value::PropertyValue;
+use wikimisc::date::Date;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum DataValue {
@@ -17,6 +18,24 @@ pub enum DataValue {
 }
 
 impl DataValue {
+    /// A Gregorian date, as Wikibase writes it (`+2003-00-00T00:00:00Z` for
+    /// the year 2003). `None` for another calendar.
+    pub fn date(date: &Date) -> Option<Self> {
+        if date.calendar() != wikimisc::date::Calendar::Gregorian {
+            return None;
+        }
+        let precision = u8::try_from(date.precision()).ok()?.try_into().ok()?;
+        Some(DataValue::Date {
+            time: date.time().to_string(),
+            precision,
+        })
+    }
+
+    /// The year `year`, from a four-digit year matched in source data.
+    pub fn year(year: &str) -> Option<Self> {
+        Self::date(&Date::new(year.parse().ok()?, None, None).ok()?)
+    }
+
     pub fn as_statement_value(&self) -> StatementValue {
         let svc = match self {
             DataValue::Monolingual { label, language } => StatementValueContent::MonolingualText {
@@ -182,11 +201,7 @@ impl Reference {
         }
 
         let p = PropertyType::new("P813", Some(wikibase_rest_api::DataType::Time));
-        let v = StatementValue::Value(StatementValueContent::Time {
-            time: chrono::Utc::now().format("+%Y-%m-%dT00:00:00Z").to_string(),
-            precision: TimePrecision::Day,
-            calendarmodel: GREGORIAN_CALENDAR.to_string(),
-        });
+        let v = DataValue::date(&Date::today())?.as_statement_value();
         let pv = PropertyValue::new(p, v);
         ret.parts_mut().push(pv);
         Some(ret)
@@ -395,6 +410,32 @@ mod tests {
         );
     }
 
+    // ── DataValue::date ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_date_uses_wikibase_format() {
+        assert_eq!(
+            DataValue::year("2014"),
+            Some(DataValue::Date {
+                time: "+2014-00-00T00:00:00Z".to_string(),
+                precision: TimePrecision::Year,
+            })
+        );
+        assert_eq!(
+            DataValue::date(&Date::new(1952, Some(3), Some(11)).unwrap()),
+            Some(DataValue::Date {
+                time: "+1952-03-11T00:00:00Z".to_string(),
+                precision: TimePrecision::Day,
+            })
+        );
+        let julian = Date::new(1952, None, None)
+            .unwrap()
+            .with_calendar(wikimisc::date::Calendar::Julian);
+        assert_eq!(DataValue::date(&julian), None);
+        assert_eq!(DataValue::year("0"), None);
+        assert_eq!(DataValue::year("x"), None);
+    }
+
     // ── compare ──────────────────────────────────────────────────────────────
 
     fn quantity(amount: &str, unit: &str) -> StatementValue {
@@ -413,10 +454,7 @@ mod tests {
     }
 
     fn year(year: &str) -> DataValue {
-        DataValue::Date {
-            time: format!("+{year}-01-01T00:00:00Z"),
-            precision: TimePrecision::Year,
-        }
+        DataValue::year(year).unwrap()
     }
 
     #[test]

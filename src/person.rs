@@ -2,13 +2,12 @@ use crate::database;
 use crate::wikidata::Wikidata;
 use axum::http::StatusCode;
 use futures::future::join_all;
-use mediawiki::Api;
 use moka::sync::Cache as MokaCache;
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 use std::time::Duration;
-use wikibase::{Reference, Snak, Statement};
 use wikimisc::mysql_async::{from_row, prelude::Queryable};
+use wikimisc::wikibase::{Reference, Snak, Statement};
 
 // Bit flags describing which Wikidata "name" classes an item is an instance of.
 const MALE: u8 = 1; // Q12308941 male given name
@@ -269,18 +268,12 @@ impl Person {
     /// Fallback lookup via the Wikidata API/SPARQL, used when no DB connection
     /// is available. One search per class per token, run concurrently.
     async fn api_lookup(tokens: &[String]) -> NameHitMap {
-        let api = match Wikidata::get_wikidata_api().await {
-            Ok(api) => api,
-            Err(_) => return HashMap::new(),
-        };
-        let futures = tokens
-            .iter()
-            .map(|token| Self::api_lookup_token(&api, token));
+        let futures = tokens.iter().map(|token| Self::api_lookup_token(token));
         let results = join_all(futures).await;
         tokens.iter().cloned().zip(results).collect()
     }
 
-    async fn api_lookup_token(api: &Api, token: &str) -> Vec<NameHit> {
+    async fn api_lookup_token(token: &str) -> Vec<NameHit> {
         let classes = [
             (MALE, Q_MALE_NAME),
             (FEMALE, Q_FEMALE_NAME),
@@ -289,7 +282,7 @@ impl Person {
             (FAMILY, Q_FAMILY_NAME),
         ];
         let futures = classes.iter().map(|(bit, class)| async move {
-            let items = Wikidata::search_names_by_class(api, token, class)
+            let items = Wikidata::search_names_by_class(token, class)
                 .await
                 .unwrap_or_default();
             (*bit, items)
@@ -298,7 +291,7 @@ impl Person {
         let mut by_qid: HashMap<String, u8> = HashMap::new();
         for (bit, items) in results {
             for qid in items {
-                *by_qid.entry(qid).or_insert(0) |= bit;
+                *by_qid.entry(qid.to_string()).or_insert(0) |= bit;
             }
         }
         by_qid
@@ -500,7 +493,7 @@ mod tests {
     /// Helper: extract the item value (Q-id) from a statement's main snak
     fn snak_item_value(statement: &Statement) -> Option<String> {
         let dv = statement.main_snak().data_value().as_ref()?;
-        if let wikibase::Value::Entity(ev) = dv.value() {
+        if let wikimisc::wikibase::Value::Entity(ev) = dv.value() {
             Some(ev.id().to_string())
         } else {
             None

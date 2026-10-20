@@ -2,7 +2,6 @@ use anyhow::{Result, anyhow};
 use futures::future::join_all;
 use futures::join;
 use futures::stream::{self, StreamExt};
-use mediawiki::Api;
 
 use regex::Regex;
 use reqwest::Client;
@@ -16,8 +15,9 @@ use std::{
     sync::{Arc, LazyLock},
 };
 use tokio::sync::Semaphore;
-use wikibase::{
-    DataValueType, Entity, EntityTrait, Snak, SnakDataType, Statement,
+use wikimisc::mediawiki::Api;
+use wikimisc::wikibase::{
+    self, DataValueType, Entity, EntityTrait, Snak, SnakDataType, Statement,
     entity_container::EntityContainer,
 };
 
@@ -364,7 +364,7 @@ impl Referee {
         entities.set_max_concurrent(MAX_CONCURRENT_ENTITY_BATCHES);
 
         Ok(Self {
-            api: Api::new("https://www.wikidata.org/w/api.php").await?,
+            api: crate::wikidata::Wikidata::client().api().await?,
             entities,
             client,
             fetch_limit: Semaphore::new(MAX_CONCURRENT_FETCHES),
@@ -548,14 +548,10 @@ impl Referee {
             }
 
             // Load external links for wiki page
-            let server = Self::get_web_server_for_wiki(wiki);
-            let url = format!(
-                "https://{}/w/api.php?action=query&prop=extlinks&ellimit=500&elexpandurl=1&format=json&titles={}",
-                server,
-                page.replace(' ', "_")
-            );
-
-            wiki_page_to_load.push((wiki.to_string(), page.to_string(), url.to_string()));
+            let Some(url) = Self::extlinks_api_url(wiki, page) else {
+                continue;
+            };
+            wiki_page_to_load.push((wiki.to_string(), page.to_string(), url));
         }
 
         if wiki_page_to_load.len() > MAX_WIKI_PAGES {
@@ -650,6 +646,24 @@ impl Referee {
     }
 
     // Helper method: get web server for wiki
+    /// The API URL listing the external links of `page` on `wiki`.
+    fn extlinks_api_url(wiki: &str, page: &str) -> Option<String> {
+        let server = Self::get_web_server_for_wiki(wiki);
+        let url = url::Url::parse_with_params(
+            &format!("https://{server}/w/api.php"),
+            [
+                ("action", "query"),
+                ("prop", "extlinks"),
+                ("ellimit", "500"),
+                ("elexpandurl", "1"),
+                ("format", "json"),
+                ("titles", &page.replace(' ', "_")),
+            ],
+        )
+        .ok()?;
+        Some(url.into())
+    }
+
     fn get_web_server_for_wiki(wiki: &str) -> String {
         let lang = wiki.split("wik").next().unwrap_or("");
 
@@ -1657,6 +1671,16 @@ mod tests {
     }
 
     #[test]
+    fn test_extlinks_api_url_encodes_title() {
+        let url = Referee::extlinks_api_url("enwiki", "AT&T Inc. #1+2").unwrap();
+        assert_eq!(
+            url,
+            "https://en.wikipedia.org/w/api.php?action=query&prop=extlinks&ellimit=500\
+             &elexpandurl=1&format=json&titles=AT%26T_Inc._%231%2B2"
+        );
+    }
+
+    #[test]
     fn test_concise_url_candidate_eq_ignores_texts_and_stated_in() {
         // PartialEq ignores the `texts` and `stated_in` fields
         let uc1 = make_url_candidate("https://a.com");
@@ -1768,7 +1792,10 @@ mod tests {
             ("Douglas Adams", format!("{filler}Douglas Adams{filler}")),
             ("Douglas Adams", format!("{wide}Douglas Adams{wide}")),
             ("Zürich", format!("{wide}in Zürich, später{wide}")),
-            ("11 March 1952", format!("{filler}\nborn 11 March 1952\n{filler}")),
+            (
+                "11 March 1952",
+                format!("{filler}\nborn 11 March 1952\n{filler}"),
+            ),
             ("1952", format!("x{filler}1952")),
             ("Adams", "Adams".to_string()),
             ("Adams", format!("{filler}{}", "Adams, ".repeat(100))),

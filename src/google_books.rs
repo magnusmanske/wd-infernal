@@ -6,7 +6,6 @@ use regex::Regex;
 use serde::Deserialize;
 use std::str::FromStr;
 use std::sync::LazyLock;
-use wikibase_rest_api::prelude::*;
 
 static RE_GOOGLE_BOOKS_ID: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^([a-zA-Z0-9]+)$").unwrap());
@@ -94,16 +93,8 @@ impl GoogleBooksFeed {
         }
 
         for date in &entry.dc_date {
-            if let Some(year) = Self::capture1(&RE_YEAR, date) {
-                let time = format!("+{year}-01-01T00:00:00Z");
-                isbn2wiki.add_reference(
-                    "P577",
-                    DataValue::Date {
-                        time,
-                        precision: TimePrecision::Year,
-                    },
-                    Reference::prop("P675", &google_books_id),
-                );
+            if let Some(year) = Self::capture1(&RE_YEAR, date).and_then(|y| DataValue::year(&y)) {
+                isbn2wiki.add_reference("P577", year, Reference::prop("P675", &google_books_id));
             }
         }
 

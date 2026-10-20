@@ -1,9 +1,8 @@
+use crate::wikidata::Wikidata;
 use axum::http::StatusCode;
 use futures::future::join_all;
-use futures::stream::{self, StreamExt};
-use mediawiki::Api;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
 use std::{
     collections::HashMap,
     sync::{Arc, LazyLock},
@@ -12,16 +11,17 @@ use tokio::sync::OnceCell;
 use tools_interface::{PetScan, Tool};
 use url::Url;
 use wikibase_rest_api::prelude::*;
+use wikimisc::entity_id::{self, ItemId};
+use wikimisc::mediawiki::Api;
 use wikimisc::site_matrix::SiteMatrix;
+use wikimisc::wikidata::WikidataError;
 
 /// Loaded on first use. A failed load is retried by the next request, rather
 /// than poisoning the cell for the rest of the process lifetime.
 static SITE_MATRIX: OnceCell<SiteMatrix> = OnceCell::const_new();
-
-/// The most IDs `wbgetentities` accepts per request.
-const WBGETENTITIES_MAX_IDS: usize = 50;
-/// Parallel API requests per cross-categories query; keeps us a polite client.
-const MAX_CONCURRENT_REQUESTS: usize = 4;
+/// The Wikidata API (which fetches the site info when it is created), shared
+/// by all requests. Loaded and retried like [`SITE_MATRIX`].
+static WIKIDATA_API: OnceCell<Api> = OnceCell::const_new();
 
 static REST_API: LazyLock<Arc<RestApi>> =
     LazyLock::new(|| Arc::new(RestApi::wikidata().expect("Could not create RestApi")));
@@ -108,9 +108,9 @@ impl CrossCats {
     }
 
     async fn get_category_item(category_item_id: &str) -> Result<Item, StatusCode> {
-        if !crate::wikidata::is_item_id(category_item_id) {
-            return Err(StatusCode::BAD_REQUEST);
-        }
+        let category_item_id: ItemId = category_item_id
+            .parse()
+            .map_err(|_| StatusCode::BAD_REQUEST)?;
         let category_item_id = EntityId::Item(category_item_id.to_string());
         let category_item = Item::get(&category_item_id, &REST_API)
             .await
@@ -118,11 +118,17 @@ impl CrossCats {
         Ok(category_item)
     }
 
+    async fn wikidata_api() -> Result<&'static Api, WikidataError> {
+        WIKIDATA_API
+            .get_or_try_init(|| Wikidata::client().api())
+            .await
+    }
+
     async fn load_site_matrix() -> Result<SiteMatrix, StatusCode> {
-        let api = Api::new("https://www.wikidata.org/w/api.php")
+        let api = Self::wikidata_api()
             .await
             .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-        SiteMatrix::new(&api)
+        SiteMatrix::new(api)
             .await
             .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)
     }
@@ -187,81 +193,52 @@ impl CrossCats {
         target_wiki: &str,
         item_info: &mut HashMap<String, ItemInfo>,
     ) -> Result<(), StatusCode> {
-        let api = Api::new("https://www.wikidata.org/w/api.php")
-            .await
-            .map_err(|e| Self::upstream_error("Wikidata API", e))?;
-
         // Items already in the target category are dropped anyway
-        let candidates: Vec<&str> = item_info
+        let candidates: Vec<entity_id::EntityId> = item_info
             .iter()
-            .filter(|(qid, info)| !info.already_in_category && crate::wikidata::is_item_id(qid))
-            .map(|(qid, _)| qid.as_str())
+            .filter(|(_, info)| !info.already_in_category)
+            .filter_map(|(qid, _)| qid.parse::<ItemId>().ok())
+            .map(entity_id::EntityId::from)
             .collect();
         let entities = Self::get_entities(
-            &api,
             &candidates,
             &[("props", "sitelinks"), ("sitefilter", target_wiki)],
         )
         .await?;
-        let local_pages: HashMap<&str, &str> = entities
+        let local_pages: HashMap<entity_id::EntityId, &str> = entities
             .iter()
-            .filter_map(|(qid, entity)| {
-                Some((
-                    qid.as_str(),
-                    entity["sitelinks"][target_wiki]["title"].as_str()?,
-                ))
+            .filter_map(|(id, entity)| {
+                Some((*id, entity["sitelinks"][target_wiki]["title"].as_str()?))
             })
             .collect();
 
         // Full claims are large, so only fetch them for items with a local page
-        let with_local_page: Vec<&str> = local_pages.keys().copied().collect();
-        let claims = Self::get_entities(&api, &with_local_page, &[("props", "claims")]).await?;
+        let with_local_page: Vec<entity_id::EntityId> = local_pages.keys().copied().collect();
+        let claims = Self::get_entities(&with_local_page, &[("props", "claims")]).await?;
 
-        for (qid, title) in local_pages {
-            if Self::is_disambiguation(&claims[qid]) {
+        for (id, title) in local_pages {
+            if claims.get(&id).is_some_and(Self::is_disambiguation) {
                 continue;
             }
-            if let Some(info) = item_info.get_mut(qid) {
+            // `ItemId` parses the canonical form only, so this is the key.
+            if let Some(info) = item_info.get_mut(&id.to_string()) {
                 info.local_page = Some(title.to_string());
             }
         }
         Ok(())
     }
 
-    /// Fetches entities via `wbgetentities`, in batches of the 50 IDs it allows.
+    /// Fetches entities via the shared Wikidata client (`wbgetentities`, 50
+    /// IDs per request, a few requests at a time). Missing entities are left
+    /// out; any failed request fails the whole call.
     async fn get_entities(
-        api: &Api,
-        ids: &[&str],
+        ids: &[entity_id::EntityId],
         params: &[(&str, &str)],
-    ) -> Result<Map<String, Value>, StatusCode> {
-        let batches: Vec<HashMap<String, String>> = ids
-            .chunks(WBGETENTITIES_MAX_IDS)
-            .map(|batch| {
-                params
-                    .iter()
-                    .chain(&[("action", "wbgetentities"), ("format", "json")])
-                    .map(|(k, v)| (k.to_string(), v.to_string()))
-                    .chain([("ids".to_string(), batch.join("|"))])
-                    .collect()
-            })
-            .collect();
-        let responses: Vec<_> = stream::iter(batches)
-            .map(|batch| async move { api.get_query_api_json(&batch).await })
-            .buffer_unordered(MAX_CONCURRENT_REQUESTS)
-            .collect()
-            .await;
-
-        let mut entities = Map::new();
-        for response in responses {
-            let mut json = response.map_err(|e| Self::upstream_error("wbgetentities", e))?;
-            if !json["error"].is_null() {
-                return Err(Self::upstream_error("wbgetentities", &json["error"]));
-            }
-            if let Value::Object(batch) = json["entities"].take() {
-                entities.extend(batch);
-            }
-        }
-        Ok(entities)
+    ) -> Result<HashMap<entity_id::EntityId, Value>, StatusCode> {
+        Wikidata::client()
+            .get_entities_with(ids, params)
+            .await
+            .map_err(|e| Self::upstream_error("wbgetentities", e))
     }
 
     fn is_disambiguation(entity: &Value) -> bool {

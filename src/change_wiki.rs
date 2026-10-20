@@ -1,7 +1,8 @@
 use crate::database;
 use anyhow::Result;
 use std::collections::HashMap;
-use wikimisc::mysql_async::{from_row, prelude::Queryable};
+use wikimisc::entity_id::ItemId;
+use wikimisc::mysql_async::{Value, from_row, prelude::Queryable};
 
 #[derive(Debug)]
 pub struct ChangeWiki {
@@ -49,7 +50,7 @@ impl ChangeWiki {
         let mut conn = database::wikidata().await?;
         let mut ret: HashMap<String, String> = HashMap::new();
         for chunk in self.titles.chunks(5000) {
-            let item_ids: Vec<&str> = chunk.iter().filter_map(|t| Self::item_number(t)).collect();
+            let item_ids = Self::item_ids(chunk);
             if item_ids.is_empty() {
                 continue;
             }
@@ -60,9 +61,9 @@ impl ChangeWiki {
                 "SELECT concat('Q',ips_item_id),ips_site_page FROM wb_items_per_site WHERE ips_site_id=? AND ips_item_id IN ({placeholders})"
             );
             // Prepend wiki_to as the first positional parameter
-            let mut params: Vec<String> = Vec::with_capacity(item_ids.len() + 1);
-            params.push(wiki_to.to_string());
-            params.extend(item_ids.into_iter().map(str::to_string));
+            let mut params: Vec<Value> = Vec::with_capacity(item_ids.len() + 1);
+            params.push(wiki_to.into());
+            params.extend(item_ids.into_iter().map(Value::from));
             let results = conn
                 .exec_iter(sql, params)
                 .await?
@@ -101,10 +102,12 @@ impl ChangeWiki {
         Ok(ret)
     }
 
-    /// The numeric part of an item ID such as `Q42`; `None` for anything else.
-    fn item_number(item: &str) -> Option<&str> {
-        item.strip_prefix(['Q', 'q'])
-            .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    /// The item IDs among `titles`, which are user input: `Q42`, `q42`, …
+    fn item_ids(titles: &[String]) -> Vec<ItemId> {
+        titles
+            .iter()
+            .filter_map(|t| ItemId::parse_lenient(t).ok())
+            .collect()
     }
 
     /// Normalize a wiki name to a safe lowercase string of only ASCII letters and underscores.
@@ -122,13 +125,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_item_number() {
-        assert_eq!(ChangeWiki::item_number("Q42"), Some("42"));
-        assert_eq!(ChangeWiki::item_number("q42"), Some("42"));
+    fn test_item_ids() {
+        let titles = |list: &[&str]| list.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            ChangeWiki::item_ids(&titles(&["Q42", "q7"])),
+            vec![ItemId::new(42), ItemId::new(7)]
+        );
         // User input; none of these may panic (multi-byte first char, empty).
-        for bad in ["", "Q", "Ä42", "Q4x", "P42", "Q-1", "Q٤٢"] {
-            assert_eq!(ChangeWiki::item_number(bad), None, "{bad:?}");
-        }
+        let bad = titles(&["", "Q", "Ä42", "Q4x", "P42", "Q-1", "Q٤٢"]);
+        assert!(ChangeWiki::item_ids(&bad).is_empty(), "{bad:?}");
     }
 
     #[test]

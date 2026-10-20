@@ -2,6 +2,7 @@ use crate::google_books::GoogleBooksFeed;
 use crate::open_library::OpenLibraryEdition;
 use crate::reference::{DataValue, Reference, ValueMatch};
 use anyhow::{Result, anyhow};
+use chrono::{DateTime, Datelike, Utc};
 use grscraper::MetadataRequestBuilder;
 use isbn::{Isbn10, Isbn13};
 use regex::Regex;
@@ -9,19 +10,21 @@ use reqwest::Client;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 use wikibase_rest_api::prelude::*;
+use wikimisc::date::Date;
+use wikimisc::entity_id::ItemId;
 
 static RE_GOODREADS_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"/(\d+)\.jpg$").unwrap());
 /// Shared by the ISBN metadata sources.
 pub(crate) static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(|| {
-    Client::builder()
-        .user_agent(
-            "WikidataInfernal/0.1 (https://wd-infernal.toolforge.org/; mailto:magnusmanske@toolforge.org)",
-        )
+    wikimisc::http::client_builder(USER_AGENT)
         .timeout(std::time::Duration::from_secs(30))
-        .connect_timeout(std::time::Duration::from_secs(10))
         .build()
         .expect("Failed to build ISBN HTTP client")
 });
+const USER_AGENT: &str = wikimisc::user_agent!(
+    name = "WikidataInfernal",
+    "https://wd-infernal.toolforge.org/; mailto:magnusmanske@toolforge.org"
+);
 static LANGUAGE_LABELS: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
     let json_string = include_str!("../static/languages.json");
     serde_json::from_str(json_string).unwrap()
@@ -56,10 +59,8 @@ impl ISBN2wiki {
     }
 
     pub async fn new_from_item(item_id: &str) -> Option<Self> {
-        if !crate::wikidata::is_item_id(item_id) {
-            return None;
-        }
-        let entity_id = EntityId::item(item_id);
+        let item: ItemId = item_id.parse().ok()?;
+        let entity_id = EntityId::item(item.to_string());
         let api = RestApi::wikidata().ok()?;
         let statements = Statements::get(&entity_id, &api).await.ok()?;
         let isbn10 = Self::extract_isbn_string(&statements, "P957")
@@ -182,19 +183,10 @@ impl ISBN2wiki {
             Reference::default(),
         );
 
-        if let Some(publication_date) = metadata.publication_date {
-            let publication_date = publication_date.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-            let precision = if publication_date.contains("-01-01T") {
-                TimePrecision::Year
-            } else {
-                TimePrecision::Day
-            };
+        if let Some(publication_date) = metadata.publication_date.and_then(Self::goodreads_date) {
             self.add_reference(
                 "P577",
-                DataValue::Date {
-                    time: publication_date,
-                    precision,
-                },
+                publication_date,
                 Reference::prop("P8383", &goodreads_work_id),
             );
         }
@@ -250,8 +242,22 @@ impl ISBN2wiki {
         Ok(())
     }
 
+    /// A Goodreads publication timestamp as a date. 1 January stands for a
+    /// date of which only the year is known.
+    fn goodreads_date(timestamp: DateTime<Utc>) -> Option<DataValue> {
+        let year = i64::from(timestamp.year());
+        let month = u8::try_from(timestamp.month()).ok()?;
+        let day = u8::try_from(timestamp.day()).ok()?;
+        let date = if (month, day) == (1, 1) {
+            Date::new(year, None, None)
+        } else {
+            Date::new(year, Some(month), Some(day))
+        };
+        DataValue::date(&date.ok()?)
+    }
+
     pub fn add_existing_item(&self, item_id: &str) {
-        if crate::wikidata::is_item_id(item_id) {
+        if item_id.parse::<ItemId>().is_ok() {
             let mut items = self
                 .existing_items
                 .lock()
@@ -426,6 +432,28 @@ mod tests {
         for item in ["Q1/../../x", "P957", ""] {
             assert!(ISBN2wiki::new_from_item(item).await.is_none(), "{item}");
         }
+    }
+
+    // ── goodreads_date ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_goodreads_date() {
+        let date = |s: &str| ISBN2wiki::goodreads_date(s.parse().unwrap());
+        assert_eq!(
+            date("2003-05-12T07:00:00Z"),
+            Some(DataValue::Date {
+                time: "+2003-05-12T00:00:00Z".to_string(),
+                precision: TimePrecision::Day,
+            })
+        );
+        // 1 January means only the year is known.
+        assert_eq!(
+            date("2003-01-01T08:00:00Z"),
+            Some(DataValue::Date {
+                time: "+2003-00-00T00:00:00Z".to_string(),
+                precision: TimePrecision::Year,
+            })
+        );
     }
 
     // ── any_source_succeeded ──────────────────────────────────────────────────

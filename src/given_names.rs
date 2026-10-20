@@ -3,6 +3,7 @@ use anyhow::{Result, anyhow};
 use axum::http::StatusCode;
 use std::collections::HashMap;
 use std::sync::OnceLock;
+use wikimisc::entity_id::ItemId;
 
 // Not in use now, might be useful for Person?
 
@@ -38,22 +39,16 @@ impl GivenNames {
 
     fn extract_names_for_gender(
         bindings: &[serde_json::Value],
-        gender_qid: &str,
+        gender: ItemId,
     ) -> HashMap<String, usize> {
-        let gender_uri = format!("http://www.wikidata.org/entity/{gender_qid}");
+        let gender_uri = gender.uri();
         bindings
             .iter()
             .filter(|binding| binding["gender"]["value"] == gender_uri)
             .filter_map(|binding| {
-                let uri = binding["q"]["value"].as_str()?;
+                let item = ItemId::from_uri(binding["q"]["value"].as_str()?).ok()?;
                 let label = binding["qLabel"]["value"].as_str()?;
-                let qid = uri
-                    .split('/')
-                    .next_back()?
-                    .trim_start_matches('Q')
-                    .parse()
-                    .ok()?;
-                Some((label.to_lowercase(), qid))
+                Some((label.to_lowercase(), usize::try_from(item.get()).ok()?))
             })
             .collect()
     }
@@ -72,8 +67,8 @@ impl GivenNames {
         let bindings = json["results"]["bindings"]
             .as_array()
             .ok_or(anyhow!("results.bindings are not an array"))?;
-        let male = Self::extract_names_for_gender(bindings, "Q12308941");
-        let female = Self::extract_names_for_gender(bindings, "Q11879590");
+        let male = Self::extract_names_for_gender(bindings, ItemId::new(12308941));
+        let female = Self::extract_names_for_gender(bindings, ItemId::new(11879590));
         Ok(Self { male, female })
     }
 }

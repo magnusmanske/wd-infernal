@@ -1,9 +1,10 @@
-use crate::wikidata::{Wikidata, is_item_id, item_from_uri};
+use crate::wikidata::Wikidata;
 use axum::http::StatusCode;
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
-use wikibase::{Reference, Snak, Statement};
+use wikimisc::entity_id::ItemId;
 use wikimisc::sparql_client::SparqlError;
+use wikimisc::wikibase::{Reference, Snak, Statement};
 
 /// Radius around a coordinate within which items lend their P131.
 const P131_RADIUS_KM: f64 = 1.0;
@@ -22,13 +23,11 @@ impl Location {
         place_q: &str,
         year: i32,
     ) -> Result<Vec<Statement>, StatusCode> {
-        if !is_item_id(place_q) {
-            return Err(StatusCode::BAD_REQUEST);
-        }
+        let place: ItemId = place_q.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
         // get preferred and normal country statements, but not deprecated ones
         let sparql = format!(
             r#"SELECT ?country ?year_from ?year_to {{
-	      wd:{place_q} p:P17 ?c .
+	      wd:{place} p:P17 ?c .
 	      ?c ps:P17 ?country .
 	      ?c wikibase:rank ?rank . FILTER(?rank != wikibase:DeprecatedRank) .
 	      OPTIONAL {{ ?c pq:P580 ?date_from . BIND(year(?date_from) AS ?year_from) }}
@@ -44,7 +43,10 @@ impl Location {
         let mut both_years = None;
         let mut one_year = None;
         for b in bindings {
-            let Some(country) = b["country"]["value"].as_str().and_then(item_from_uri) else {
+            let Some(country) = b["country"]["value"]
+                .as_str()
+                .and_then(|uri| ItemId::from_uri(uri).ok())
+            else {
                 continue;
             };
             let year_from = b["year_from"]["value"]
@@ -71,7 +73,7 @@ impl Location {
         }
         let mut statements = vec![];
         if let Some(country) = both_years.or(one_year).or(no_years) {
-            let snak = Snak::new_item("P17", country);
+            let snak = Snak::new_item("P17", &country.to_string());
             let reference = Reference::new(vec![
                 Wikidata::infernal_reference_snak(),
                 Snak::new_item("P3452", "Q131293105"), // inferred from place and date
@@ -90,18 +92,18 @@ impl Location {
             return Err(StatusCode::BAD_REQUEST);
         }
         let json = Self::nearby_p131_json(latitude, longitude).await?;
-        let mut entities: Vec<&str> = json["results"]["bindings"]
+        let mut entities: Vec<ItemId> = json["results"]["bindings"]
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|binding| item_from_uri(binding["p131"]["value"].as_str()?))
+            .filter_map(|binding| ItemId::from_uri(binding["p131"]["value"].as_str()?).ok())
             .collect();
         entities.sort();
         entities.dedup();
         let statements: Vec<_> = entities
             .iter()
             .map(|entity| {
-                let snak = Snak::new_item("P131", entity);
+                let snak = Snak::new_item("P131", &entity.to_string());
                 let reference = Reference::new(vec![
                     Wikidata::infernal_reference_snak(),
                     Snak::new_item("P3452", "Q96623327"), // inferred from coordinate location
@@ -195,7 +197,7 @@ LIMIT 5"#
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wikibase::{EntityType, EntityValue};
+    use wikimisc::wikibase::{self, EntityType, EntityValue};
 
     #[tokio::test]
     async fn test_country_for_location_and_date_rejects_bad_item() {

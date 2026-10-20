@@ -9,21 +9,17 @@ static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(|| {
     let mut headers = header::HeaderMap::new();
     headers.insert(
         header::ACCEPT,
-        "application/json".parse().expect("valid header value"),
+        header::HeaderValue::from_static("application/json"),
     );
-    headers.insert(
-        header::USER_AGENT,
-        "Wikidata Infernal Search Client/1.0"
-            .parse()
-            .expect("valid header value"),
-    );
-    Client::builder()
+    wikimisc::http::client_builder(USER_AGENT)
         .default_headers(headers)
-        .timeout(std::time::Duration::from_secs(60))
-        .connect_timeout(std::time::Duration::from_secs(10))
         .build()
         .expect("Failed to build VIAF HTTP client")
 });
+const USER_AGENT: &str = wikimisc::user_agent!(
+    name = "Wikidata Infernal Search Client",
+    "https://wd-infernal.toolforge.org/; mailto:magnusmanske@toolforge.org"
+);
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct RecordId {

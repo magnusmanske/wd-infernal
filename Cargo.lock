@@ -1225,12 +1225,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "html-escape"
-version = "0.2.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9356095b4b41197bba32173600e1582792cda618f65d12f68e2e77d273413c5"
-
-[[package]]
 name = "html5ever"
 version = "0.39.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1508,9 +1502,9 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 
 [[package]]
 name = "isbn"
-version = "0.8.20261019"
+version = "0.8.20261020"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08c5c5bbde050b0bd839421c037dc2a6cb1311061200da4a5f85d7d5df8379af"
+checksum = "bc140a5ca967222c212e87c0e2577331e2fed36d1c66ced7f1bb804ebb2251cc"
 dependencies = [
  "arrayvec",
  "codegen",
@@ -2615,7 +2609,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower",
- "tower-http",
+ "tower-http 0.6.11",
  "tower-service",
  "url",
  "wasm-bindgen",
@@ -2771,9 +2765,9 @@ checksum = "eec689c0bc40ff2458a5977b6619cb718087084a18e02a131c599b62d05e1a5f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.15"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "aws-lc-rs",
  "ring",
@@ -3346,9 +3340,9 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tokio"
-version = "1.53.3"
+version = "1.54.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce3335fa71841cda333a58d7615b03901380ecf09d59b3296d21f8bbac0dde4e"
+checksum = "a0c168a474b95bfecfe908a65d4bdffc523144b649a74c09c286afb35d53e0bc"
 dependencies = [
  "bytes",
  "libc",
@@ -3439,9 +3433,9 @@ checksum = "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
 
 [[package]]
 name = "toolforge"
-version = "6.1.0"
+version = "6.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "252242bfc1ed6f61ffa640fc820bf42246b022ef435670a777b1972a40839e24"
+checksum = "80c41a1af6c4e16eeb78b07a10c4b1c910cdea005d306c67255af1a480e93298"
 dependencies = [
  "dirs",
  "mysql_async",
@@ -3519,6 +3513,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "tower-http"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08a05a66a4fdd61cbbe0a1d755ffe0ca6aba159dd4820936a0ff8a8278245b9c"
+dependencies = [
+ "async-compression",
+ "bitflags",
+ "bytes",
+ "futures-core",
+ "futures-util",
+ "http",
+ "http-body",
+ "http-body-util",
+ "percent-encoding",
+ "pin-project-lite",
+ "tokio",
+ "tokio-util",
+ "tower-layer",
+ "tower-service",
+ "tracing",
+]
+
+[[package]]
 name = "tower-layer"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3575,6 +3592,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-serde"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "704b1aeb7be0d0a84fc9828cae51dab5970fee5088f83d1dd7ee6f6246fc6ff1"
+dependencies = [
+ "serde",
+ "tracing-core",
+]
+
+[[package]]
 name = "tracing-subscriber"
 version = "0.3.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3584,12 +3611,15 @@ dependencies = [
  "nu-ansi-term",
  "once_cell",
  "regex-automata",
+ "serde",
+ "serde_json",
  "sharded-slab",
  "smallvec",
  "thread_local",
  "tracing",
  "tracing-core",
  "tracing-log",
+ "tracing-serde",
 ]
 
 [[package]]
@@ -3606,9 +3636,9 @@ checksum = "86a801b3cea342a06d468c8710662aa29e5e05e4f5c0d62f00bbb7f2ad7941c2"
 
 [[package]]
 name = "typed-path"
-version = "0.12.3"
+version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e28f89b80c87b8fb0cf04ab448d5dd0dd0ade2f8891bae878de66a75a28600e"
+checksum = "54ec2755506471f54baf5e4bb5499d8e510cc1caf271270e778a736bd2d7336c"
 
 [[package]]
 name = "typenum"
@@ -3857,9 +3887,7 @@ dependencies = [
  "chrono",
  "futures",
  "goodreads-metadata-scraper",
- "html-escape",
  "isbn",
- "mediawiki",
  "moka",
  "quick-xml",
  "regex",
@@ -3869,14 +3897,13 @@ dependencies = [
  "tikv-jemallocator",
  "tokio",
  "tools_interface",
- "tower-http",
+ "tower",
+ "tower-http 0.6.11",
  "tracing",
- "tracing-subscriber",
  "url",
  "urlencoding",
  "utoipa",
  "utoipa-swagger-ui",
- "wikibase",
  "wikibase_rest_api",
  "wikimisc",
 ]
@@ -3915,9 +3942,9 @@ dependencies = [
 
 [[package]]
 name = "webpki-root-certs"
-version = "1.0.9"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b96554aa2acc8ccdb7e1c9a58a7a68dd5d13bccc69cd124cb09406db612a1c9b"
+checksum = "58ec80e73fd8baf57bf0d9615554c75348bda990d6d5bbeab964dd068319fecb"
 dependencies = [
  "rustls-pki-types",
 ]
@@ -3961,11 +3988,17 @@ dependencies = [
 
 [[package]]
 name = "wikimisc"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed84fb47b762bbf25127a3dc67ac355db60b6125c9121fd375b939c0285f5828"
+checksum = "16fe301c349426170bf436ca0e24502495882ada53b0d33c5e53a0b761116507"
 dependencies = [
+ "axum",
+ "chrono",
  "csv",
+ "futures",
+ "httpdate",
+ "log",
+ "mediawiki",
  "metrics",
  "metrics-util",
  "regex",
@@ -3976,6 +4009,9 @@ dependencies = [
  "thiserror",
  "tokio",
  "toolforge",
+ "tower-http 0.7.1",
+ "tracing-log",
+ "tracing-subscriber",
  "urlencoding",
  "wikibase",
 ]

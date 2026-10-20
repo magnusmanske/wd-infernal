@@ -19,12 +19,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 quick-xml = { version = "0.37", features = ["serialize"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tower-http = { version = "0.6", features = ["full"] }
 moka = { version = "0.12", features = ["sync"] }
-html-escape = "0.2"
-wikibase = "0.7"
-mediawiki = "0.5"
 futures = "0.3"
 url = "2"
 regex = "1"
@@ -35,15 +31,26 @@ anyhow = "1"
 goodreads-metadata-scraper = "0.2"
 isbn = "0.8"
 wikibase_rest_api = "0.4"
-wikimisc = { version = "0.2", features = [
+wikimisc = { version = "0.3", features = [
 	"database",
+	"date",
+	"entity-id",
+	"escape",
+	"http",
+	"logging",
+	"server",
 	"site-matrix",
 	"sparql-client",
-	"telemetry"]
-}
+	"telemetry",
+	"wikibase",
+	"wikidata",
+] }
 tools_interface = "0.1"
 utoipa = { version = "6", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "10", features = ["axum"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
 
 # No `panic = 'abort'`: a panicking request must fail only itself, as a 500
 # (see `CatchPanicLayer` in src/server.rs), not take the whole server down.

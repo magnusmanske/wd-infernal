@@ -21,21 +21,19 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
-use tower_http::{
-    catch_panic::CatchPanicLayer,
-    compression::CompressionLayer,
-    cors::{AllowOrigin, Any, CorsLayer},
-    set_header::SetResponseHeaderLayer,
-    timeout::TimeoutLayer,
-    trace::TraceLayer,
-};
+use tower_http::set_header::SetResponseHeaderLayer;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 use wikibase_rest_api::Patch;
+use wikimisc::entity_id::ItemId;
+use wikimisc::{escape, server};
 
 /// Hard upper bound on how long any single request may take before the
 /// connection is released with a 408.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// The port to listen on unless `WD_INFERNAL_PORT` says otherwise.
+const DEFAULT_PORT: u16 = 8000;
 
 #[derive(Deserialize)]
 struct Format {
@@ -115,6 +113,32 @@ fn items2table(items: &[String]) -> String {
     html
 }
 
+/// The HTML page for an `initial_search` with the result `items`.
+fn search_results_page(query: &str, items: &[String]) -> String {
+    // Escapes quotes too: the query goes into an attribute value.
+    let escaped_query = escape::html(query);
+    let form = format!(
+        "<form id='search-form' class='mb-3'>\
+            <div class='input-group'>\
+                <input type='text' id='search-input' class='form-control' value=\"{escaped_query}\" placeholder='Search name'>\
+                <div class='input-group-append'>\
+                    <button type='submit' class='btn btn-primary'>Search</button>\
+                </div>\
+            </div>\
+        </form>"
+    );
+    let body = if items.is_empty() {
+        format!(
+            "<div class='alert alert-warning' role='alert'>No results found for <strong>{escaped_query}</strong>.</div>"
+        )
+    } else {
+        let table = items2table(items);
+        format!("<div class='row'>{table}</div>")
+    };
+    let html = format!("<h1>Results</h1>{form}{body}");
+    include_str!("../static/result.html").replace("%%RESULT%%", &html)
+}
+
 // ── Route handlers ───────────────────────────────────────────────────────────
 
 /// Liveness check, used by Kubernetes to restart a hung server.
@@ -158,30 +182,7 @@ async fn initial_search(
         StatusCode::BAD_REQUEST
     })?;
     match params.format.as_deref() {
-        Some("html") => {
-            let escaped_query = html_escape::encode_text(&query);
-            let form = format!(
-                "<form id='search-form' class='mb-3'>\
-                    <div class='input-group'>\
-                        <input type='text' id='search-input' class='form-control' value=\"{escaped_query}\" placeholder='Search name'>\
-                        <div class='input-group-append'>\
-                            <button type='submit' class='btn btn-primary'>Search</button>\
-                        </div>\
-                    </div>\
-                </form>"
-            );
-            let body = if ret.is_empty() {
-                format!(
-                    "<div class='alert alert-warning' role='alert'>No results found for <strong>{escaped_query}</strong>.</div>"
-                )
-            } else {
-                let table = items2table(&ret);
-                format!("<div class='row'>{table}</div>")
-            };
-            let html = format!("<h1>Results</h1>{form}{body}");
-            let html = include_str!("../static/result.html").replace("%%RESULT%%", &html);
-            Ok(Html(html).into_response())
-        }
+        Some("html") => Ok(Html(search_results_page(&query, &ret)).into_response()),
         _ => Ok(Json(ret).into_response()),
     }
 }
@@ -288,7 +289,7 @@ async fn isbn_isbn(Path(isbn): Path<String>) -> Result<impl IntoResponse, Status
 )]
 async fn isbn_item(Path(item): Path<String>) -> Result<impl IntoResponse, StatusCode> {
     tracing::info!("isbn_item: {item}");
-    if !crate::wikidata::is_item_id(&item) {
+    if item.parse::<ItemId>().is_err() {
         tracing::warn!("isbn_item: invalid item {item}");
         return Err(StatusCode::NOT_FOUND);
     }
@@ -341,16 +342,16 @@ async fn viaf_search(Path(query): Path<String>) -> impl IntoResponse {
 )]
 async fn referee(Path(item): Path<String>) -> Result<impl IntoResponse, StatusCode> {
     tracing::info!("referee: {item}");
-    if !crate::wikidata::is_item_id(&item.trim().to_uppercase()) {
+    let Ok(item) = item.trim().to_uppercase().parse::<ItemId>() else {
         tracing::warn!("referee: invalid item {item}");
         return Err(StatusCode::NOT_FOUND);
-    }
+    };
     let referee = crate::referee::REFEREE.get().ok_or_else(|| {
         tracing::error!("referee not initialized");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
     let results = referee
-        .get_potential_references(&item)
+        .get_potential_references(&item.to_string())
         .await
         .unwrap_or_else(|e| {
             tracing::warn!("referee get_potential_references failed for {item}: {e}");
@@ -398,7 +399,10 @@ impl Server {
     // and does not drop even when the body is reduced to `Ok(())`.
     #[allow(clippy::cognitive_complexity)]
     pub async fn start() -> Result<(), Box<dyn std::error::Error>> {
-        tracing_subscriber::fmt::init();
+        // Errors only, unless `RUST_LOG` says otherwise.
+        wikimisc::logging::Logging::new()
+            .default_filter("error")
+            .init();
         crate::metrics::start_telemetry();
 
         // Most endpoints work without the databases, e.g. locally.
@@ -418,20 +422,9 @@ impl Server {
         println!("listening on http://{addr}");
         let listener = tokio::net::TcpListener::bind(addr).await?;
         tracing::info!("startup complete");
-        axum::serve(listener, app).await?;
+        // Drains requests in flight on SIGTERM, then sends the final telemetry push.
+        server::serve(listener, app).await?;
         Ok(())
-    }
-
-    /// Only traffic from Wikipedia, Wikidata, or Toolforge is allowed.
-    fn is_allowed_origin(origin: &HeaderValue) -> bool {
-        let Ok(origin) = origin.to_str() else {
-            return false;
-        };
-        origin == "https://www.wikidata.org"
-            || origin == "https://wikidata.org"
-            || origin.ends_with(".wikipedia.org")
-            || origin.ends_with(".wikidata.org")
-            || origin.ends_with(".toolforge.org")
     }
 
     fn router() -> Router {
@@ -482,36 +475,27 @@ impl Server {
 
     /// Wraps `routes` in the middleware every request passes through.
     fn add_middleware(routes: Router) -> Router {
-        let cors = CorsLayer::new()
-            .allow_origin(AllowOrigin::predicate(|origin: &HeaderValue, _| {
-                Self::is_allowed_origin(origin)
-            }))
-            .allow_methods(Any)
-            .allow_headers(Any);
-
-        routes
-            // Backstop: no request may occupy a connection indefinitely.
-            .layer(TimeoutLayer::with_status_code(
-                StatusCode::REQUEST_TIMEOUT,
-                REQUEST_TIMEOUT,
-            ))
-            // A panicking handler becomes a 500 rather than a dropped connection.
-            .layer(CatchPanicLayer::new())
+        // Backstop: no request may occupy a connection indefinitely.
+        let routes = server::timeout(routes, REQUEST_TIMEOUT, StatusCode::REQUEST_TIMEOUT);
+        // Tracing, compression, and a panicking handler becomes a 500 rather
+        // than a dropped connection.
+        let routes = server::standard_layers(routes)
             // Outside the timeout and the panic catcher, so timed-out and
             // panicked requests are counted too.
-            .layer(middleware::from_fn(crate::metrics::middleware))
-            .layer(TraceLayer::new_for_http())
-            .layer(CompressionLayer::new().br(true).gzip(true))
-            .layer(cors)
+            .layer(middleware::from_fn(crate::metrics::middleware));
+        // Only traffic from Wikimedia sites (over https) and Toolforge.
+        server::cors_wikimedia(
+            routes,
+            server::WikimediaCors {
+                credentials: false,
+                allow_localhost: false,
+            },
+        )
     }
 
+    /// `WD_INFERNAL_ADDRESS` (default: all interfaces) and `WD_INFERNAL_PORT`.
     fn get_server_address() -> SocketAddr {
-        let port: u16 = std::env::var("WD_INFERNAL_PORT")
-            .map_or(8000, |port| port.as_str().parse::<u16>().unwrap_or(8000));
-
-        let address = [0, 0, 0, 0];
-
-        SocketAddr::from((address, port))
+        server::listen_addr("WD_INFERNAL", DEFAULT_PORT)
     }
 }
 
@@ -545,36 +529,64 @@ mod tests {
     use super::*;
     use std::sync::atomic::Ordering;
 
-    // ── is_allowed_origin ─────────────────────────────────────────────────────
+    // ── CORS ──────────────────────────────────────────────────────────────────
 
-    #[test]
-    fn test_is_allowed_origin_accepts_wikimedia_and_toolforge() {
+    /// The `Access-Control-Allow-Origin` the router answers a preflight
+    /// request from `origin` with, if any.
+    async fn preflight_allowed_origin(origin: &str) -> Option<String> {
+        use axum::body::Body;
+        use axum::http::{Method, Request, header};
+        use tower::ServiceExt;
+
+        let request = Request::builder()
+            .method(Method::OPTIONS)
+            .uri("/healthz")
+            .header(header::ORIGIN, origin)
+            .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+            .header(
+                header::ACCESS_CONTROL_REQUEST_HEADERS,
+                "content-type,api-user-agent",
+            )
+            .body(Body::empty())
+            .unwrap();
+        let response = Server::router().oneshot(request).await.unwrap();
+        response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .map(|value| value.to_str().unwrap().to_string())
+    }
+
+    #[tokio::test]
+    async fn test_cors_accepts_wikimedia_and_toolforge() {
         for origin in [
             "https://www.wikidata.org",
             "https://wikidata.org",
             "https://en.wikipedia.org",
             "https://test.wikidata.org",
             "https://wd-infernal.toolforge.org",
+            "https://commons.wikimedia.org",
         ] {
-            assert!(
-                Server::is_allowed_origin(&HeaderValue::from_static(origin)),
+            assert_eq!(
+                preflight_allowed_origin(origin).await.as_deref(),
+                Some(origin),
                 "{origin} should be allowed"
             );
         }
     }
 
-    #[test]
-    fn test_is_allowed_origin_rejects_others() {
-        // Note: the suffix checks are scheme-agnostic, so "http://xx.wikidata.org"
-        // is allowed too. Harmless in practice, as Wikimedia sites are HTTPS-only.
+    #[tokio::test]
+    async fn test_cors_rejects_others() {
         for origin in [
             "https://evil.com",
             "https://wikidata.org.evil.com",
             "https://notwikipedia.org",
             "https://wikipedia.org.co",
+            "http://en.wikipedia.org",
+            "http://localhost:8000",
         ] {
-            assert!(
-                !Server::is_allowed_origin(&HeaderValue::from_static(origin)),
+            assert_eq!(
+                preflight_allowed_origin(origin).await,
+                None,
                 "{origin} should be rejected"
             );
         }
@@ -727,37 +739,34 @@ mod tests {
     // ── get_server_address ────────────────────────────────────────────────────
 
     #[test]
-    fn test_get_server_address_does_not_panic() {
-        let _ = Server::get_server_address();
-    }
-
-    #[test]
-    fn test_get_server_address_is_ipv4() {
-        let addr = Server::get_server_address();
-        assert!(addr.is_ipv4(), "server address should always be IPv4");
-    }
-
-    #[test]
-    fn test_get_server_address_binds_all_interfaces() {
-        let addr = Server::get_server_address();
-        assert_eq!(
-            addr.ip().to_string(),
-            "0.0.0.0",
-            "server should always bind to all interfaces (0.0.0.0)"
-        );
-    }
-
-    #[test]
-    fn test_get_server_address_port_matches_env_or_default() {
-        let expected: u16 = std::env::var("WD_INFERNAL_PORT")
+    fn test_get_server_address_matches_env_or_default() {
+        let expected_ip: std::net::IpAddr = std::env::var("WD_INFERNAL_ADDRESS")
             .ok()
-            .and_then(|v| v.parse().ok())
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or([0, 0, 0, 0].into());
+        let expected_port: u16 = std::env::var("WD_INFERNAL_PORT")
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
             .unwrap_or(8000);
-        let addr = Server::get_server_address();
         assert_eq!(
-            addr.port(),
-            expected,
-            "port must be WD_INFERNAL_PORT when set and valid, otherwise 8000"
+            Server::get_server_address(),
+            SocketAddr::new(expected_ip, expected_port),
+            "all interfaces and port 8000, unless WD_INFERNAL_ADDRESS/WD_INFERNAL_PORT say otherwise"
         );
+    }
+
+    // ── search_results_page ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_search_results_page_escapes_query() {
+        let query = "\"><script>alert(1)</script>'";
+        for items in [vec![], vec!["Q42".to_string()]] {
+            let html = search_results_page(query, &items);
+            assert!(!html.contains("<script>alert"), "{html}");
+            assert!(!html.contains("value=\"\">"), "{html}");
+            assert!(html.contains("value=\"&quot;&gt;&lt;script&gt;"), "{html}");
+        }
+        assert!(search_results_page(query, &[]).contains("No results found"));
+        assert!(search_results_page(query, &["Q42".to_string()]).contains("<tt>Q42</tt>"));
     }
 }
