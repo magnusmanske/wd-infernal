@@ -318,9 +318,9 @@ const MAX_WIKI_EXTLINK_URLS: usize = 80;
 /// Upper bound on concurrent `wbgetentities` batches per entity load.
 const MAX_CONCURRENT_ENTITY_BATCHES: usize = 4;
 
-/// The shared entity cache is dropped once it holds more than this many entities,
-/// so a long-running process does not grow without bound.
-const MAX_CACHED_ENTITIES: usize = 5000;
+/// Only this much of a page is read; the rest is cut off. Without a cap, one
+/// link to a large file could exhaust the server's memory.
+const MAX_PAGE_BYTES: usize = 2 * 1024 * 1024;
 
 /// Deadline for one `get_potential_references` run. Deliberately below the
 /// server's request timeout, so the caller gets a real error rather than a 408.
@@ -328,11 +328,15 @@ const OPERATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45
 
 #[derive(Debug)]
 pub struct Referee {
-    api: Api,
+    api: Arc<Api>,
+    /// The entities of the current run only, see [`Self::for_run`].
     entities: EntityContainer,
+    /// Just the labels and aliases of the current run's statement values, see
+    /// [`Self::load_value_terms`].
+    value_terms: EntityContainer,
     client: Client,
     /// Process-wide limit on concurrent outbound page fetches.
-    fetch_limit: Semaphore,
+    fetch_limit: Arc<Semaphore>,
 }
 
 /// A globally shared `Referee` instance, initialized once at startup.
@@ -360,15 +364,34 @@ impl Referee {
             .pool_max_idle_per_host(2)
             .build()?;
 
+        Ok(Self {
+            api: Arc::new(crate::wikidata::Wikidata::client().api().await?),
+            entities: Self::new_entity_container(),
+            value_terms: EntityContainer::new(),
+            client,
+            fetch_limit: Arc::new(Semaphore::new(MAX_CONCURRENT_FETCHES)),
+        })
+    }
+
+    fn new_entity_container() -> EntityContainer {
         let mut entities = EntityContainer::new();
         entities.set_max_concurrent(MAX_CONCURRENT_ENTITY_BATCHES);
+        entities
+    }
 
-        Ok(Self {
-            api: crate::wikidata::Wikidata::client().api().await?,
-            entities,
-            client,
-            fetch_limit: Semaphore::new(MAX_CONCURRENT_FETCHES),
-        })
+    /// A `Referee` for a single run: it shares the API, the HTTP client and the
+    /// fetch limit, but starts with no entities. An entity cache shared across
+    /// runs filled up with thousands of large entities (countries, occupations,
+    /// properties) and ran the server out of memory; it also served stale
+    /// statements, so references added in the meantime were suggested again.
+    fn for_run(&self) -> Self {
+        Self {
+            api: Arc::clone(&self.api),
+            entities: Self::new_entity_container(),
+            value_terms: EntityContainer::new(),
+            client: self.client.clone(),
+            fetch_limit: Arc::clone(&self.fetch_limit),
+        }
     }
 
     async fn validate_url(url: &str) -> Result<()> {
@@ -426,12 +449,51 @@ impl Referee {
             .get("content-type")
             .map_or(String::new(), |ct| ct.to_str().unwrap_or("").to_string());
 
-        if content_type.is_empty() {
+        if !Self::is_textual(&content_type) {
             return Ok(String::new());
         }
 
-        let content = response.text().await?;
-        Ok(content)
+        let body = Self::read_body_prefix(response, MAX_PAGE_BYTES).await?;
+        Ok(Self::decode_text(&body, &content_type))
+    }
+
+    /// Whether a page with this `Content-Type` can hold text worth searching:
+    /// HTML, XML, JSON (the wiki APIs) or plain text, but not a PDF, image or video.
+    fn is_textual(content_type: &str) -> bool {
+        let essence = content_type
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        essence.starts_with("text/") || ["html", "xml", "json"].iter().any(|t| essence.contains(t))
+    }
+
+    /// At most the first `limit` bytes of the body; the rest is never downloaded.
+    async fn read_body_prefix(mut response: reqwest::Response, limit: usize) -> Result<Vec<u8>> {
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await? {
+            let room = limit - body.len();
+            body.extend_from_slice(&chunk[..chunk.len().min(room)]);
+            if body.len() == limit {
+                break;
+            }
+        }
+        Ok(body)
+    }
+
+    /// `body` decoded as the charset in `content_type` says (UTF-8 by
+    /// default), like `reqwest::Response::text` does.
+    fn decode_text(body: &[u8], content_type: &str) -> String {
+        let encoding = content_type
+            .split(';')
+            .filter_map(|param| param.split_once('='))
+            .filter(|(name, _)| name.trim().eq_ignore_ascii_case("charset"))
+            .find_map(|(_, label)| {
+                encoding_rs::Encoding::for_label(label.trim().trim_matches('"').as_bytes())
+            })
+            .unwrap_or(encoding_rs::UTF_8);
+        encoding.decode(body).0.into_owned()
     }
 
     async fn get_contents_from_url(&self, url: &str) -> String {
@@ -895,11 +957,12 @@ impl Referee {
         ret
     }
 
-    /// Batch-loads the entities used as statement values, so the per-statement
-    /// lookups in `get_statement_search_patterns` are cache hits.
-    /// Without this, an item with hundreds of entity-valued statements issues
-    /// hundreds of single-entity `wbgetentities` calls, all in flight at once.
-    async fn preload_statement_value_entities(&self, statements: &[EntityStatement]) -> Result<()> {
+    /// Batch-loads the labels and aliases in `languages` (and `mul`) of the
+    /// entities used as statement values, for `get_statement_search_patterns`.
+    /// That is all it needs, and a tiny fraction of the full entities: values
+    /// are often countries or occupations, with labels in hundreds of languages
+    /// and thousands of statements.
+    async fn load_value_terms(&self, statements: &[EntityStatement], languages: &HashSet<&str>) {
         let mut entity_ids: Vec<String> = statements
             .iter()
             .filter(|statement| !NO_REFS_FOR_PROPERTIES.contains(&statement.property.as_str()))
@@ -912,25 +975,60 @@ impl Referee {
             .collect();
         entity_ids.sort();
         entity_ids.dedup();
-        self.entities.load_entities(&self.api, &entity_ids).await?;
-        Ok(())
+        let languages = languages
+            .iter()
+            .chain(&["mul"])
+            .copied()
+            .collect::<Vec<_>>()
+            .join("|");
+        let batches: Vec<_> = entity_ids
+            .chunks(50)
+            .map(|ids| {
+                self.api.params_into(&[
+                    ("action", "wbgetentities"),
+                    ("ids", &ids.join("|")),
+                    // The entity parser needs all three keys.
+                    ("props", "labels|descriptions|aliases"),
+                    ("languages", &languages),
+                    ("format", "json"),
+                ])
+            })
+            .collect();
+        // A `Vec` of futures, not a lazy `map`, keeps the future `Send` for axum.
+        let requests: Vec<_> = batches
+            .iter()
+            .map(|params| self.api.get_query_api_json(params))
+            .collect();
+        let responses: Vec<_> = stream::iter(requests)
+            .buffer_unordered(MAX_CONCURRENT_ENTITY_BATCHES)
+            .collect()
+            .await;
+        // A failed batch, or an entity that does not parse, only costs the
+        // statements with those values their matches.
+        let entities = responses
+            .iter()
+            .filter_map(|response| response.as_ref().ok()?["entities"].as_object())
+            .flat_map(|entities| entities.values());
+        for entity in entities {
+            self.value_terms.set_entity_from_json(entity).ok();
+        }
     }
 
-    async fn get_statement_search_patterns(
+    fn get_statement_search_patterns(
         &self,
         statement: &EntityStatement,
         language: &str,
-    ) -> Result<Vec<String>> {
+    ) -> Vec<String> {
         let mut ret = Vec::new();
 
         if NO_REFS_FOR_PROPERTIES.contains(&statement.property.as_str()) {
-            return Ok(ret);
+            return ret;
         }
 
         let mainsnak = statement.claim.main_snak();
         let datavalue = match mainsnak.data_value() {
             Some(dv) => dv,
-            None => return Ok(ret),
+            None => return ret,
         };
         let value = datavalue.value();
         let dv_type = datavalue.value_type();
@@ -939,7 +1037,7 @@ impl Referee {
             DataValueType::Time => {
                 let time_value = match value {
                     wikibase::Value::Time(tv) => tv,
-                    _ => return Ok(ret),
+                    _ => return ret,
                 };
                 let time_str = time_value.time();
 
@@ -980,11 +1078,9 @@ impl Referee {
             }
             DataValueType::EntityId => {
                 if let wikibase::Value::Entity(ev) = value {
-                    let entity_id = ev.id();
-                    self.entities.load_entity(&self.api, entity_id).await?;
-                    let vi = match self.entities.get_entity(entity_id) {
+                    let vi = match self.value_terms.get_entity(ev.id()) {
                         Some(i) => i,
-                        None => return Ok(ret),
+                        None => return ret,
                     };
                     let mut aliases: Vec<String> = vi
                         .aliases()
@@ -1032,7 +1128,7 @@ impl Referee {
             }
         }
 
-        Ok(ret)
+        ret
     }
 
     fn snak_string_values<'a>(
@@ -1099,23 +1195,16 @@ impl Referee {
     /// crate then sleeps and re-sends forever, so no client timeout ever fires and
     /// the request hangs indefinitely. Fail with a clear error instead.
     pub async fn get_potential_references(&self, entity: &str) -> Result<Vec<ConciseUrlCandidate>> {
-        tokio::time::timeout(OPERATION_TIMEOUT, self.potential_references(entity))
-            .await
-            .map_err(|_| anyhow!("referee timed out after {OPERATION_TIMEOUT:?} for {entity}"))?
+        tokio::time::timeout(
+            OPERATION_TIMEOUT,
+            self.for_run().potential_references(entity),
+        )
+        .await
+        .map_err(|_| anyhow!("referee timed out after {OPERATION_TIMEOUT:?} for {entity}"))?
     }
 
     async fn potential_references(&self, entity: &str) -> Result<Vec<ConciseUrlCandidate>> {
         let entity = entity.trim().to_uppercase();
-
-        // The entity cache is shared by every request and never expires, so drop it
-        // wholesale once it gets large rather than growing for the process lifetime.
-        if self.entities.len() > MAX_CACHED_ENTITIES {
-            tracing::info!(
-                "referee: clearing entity cache ({} entities)",
-                self.entities.len()
-            );
-            self.entities.clear();
-        }
 
         if !self.is_supported_entity(&entity).await? {
             return Ok(vec![]);
@@ -1131,23 +1220,21 @@ impl Referee {
             return Ok(vec![]);
         }
 
-        self.preload_statement_value_entities(&statements).await?;
-
         let languages: HashSet<&str> = url_candidates
             .values()
             .map(|uc| uc.language.as_str())
             .collect();
+        self.load_value_terms(&statements, &languages).await;
+
         let mut jobs = Vec::with_capacity(statements.len());
         for statement in statements {
-            let mut patterns = HashMap::new();
-            for &language in &languages {
-                // A failed lookup only costs this statement its matches.
-                let found = self
-                    .get_statement_search_patterns(&statement, language)
-                    .await
-                    .unwrap_or_default();
-                patterns.insert(language.to_string(), found);
-            }
+            let patterns = languages
+                .iter()
+                .map(|&language| {
+                    let found = self.get_statement_search_patterns(&statement, language);
+                    (language.to_string(), found)
+                })
+                .collect();
             jobs.push((statement, patterns));
         }
 
@@ -1768,6 +1855,68 @@ mod tests {
         assert!(!Referee::does_statement_have_this_reference(
             &statement, &uc
         ));
+    }
+
+    // ── Page fetching ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_is_textual() {
+        for ct in [
+            "text/html",
+            "text/html; charset=UTF-8",
+            "TEXT/PLAIN",
+            "application/xhtml+xml",
+            "application/json; charset=utf-8",
+        ] {
+            assert!(Referee::is_textual(ct), "{ct}");
+        }
+        for ct in [
+            "",
+            "application/pdf",
+            "image/jpeg",
+            "video/mp4",
+            "application/zip",
+        ] {
+            assert!(!Referee::is_textual(ct), "{ct}");
+        }
+    }
+
+    #[test]
+    fn test_decode_text_uses_charset() {
+        // "Müller" in ISO-8859-1
+        let latin1 = b"M\xfcller";
+        assert_eq!(
+            Referee::decode_text(latin1, "text/html; Charset=\"ISO-8859-1\""),
+            "Müller"
+        );
+        assert_eq!(
+            Referee::decode_text("Müller".as_bytes(), "text/html"),
+            "Müller"
+        );
+        assert_eq!(
+            Referee::decode_text("Müller".as_bytes(), "text/html; charset=bogus"),
+            "Müller"
+        );
+    }
+
+    fn response_with_body(body: &'static str) -> reqwest::Response {
+        reqwest::Response::from(axum::http::Response::new(body))
+    }
+
+    #[tokio::test]
+    async fn test_read_body_prefix_cuts_off_at_limit() {
+        let body = Referee::read_body_prefix(response_with_body("0123456789"), 4)
+            .await
+            .unwrap();
+        assert_eq!(body, b"0123");
+    }
+
+    #[tokio::test]
+    async fn test_read_body_prefix_keeps_short_body() {
+        let body = Referee::read_body_prefix(response_with_body("0123"), 10)
+            .await
+            .unwrap();
+        assert_eq!(body, b"0123");
     }
 
     // ── SearchPattern ─────────────────────────────────────────────────────────
