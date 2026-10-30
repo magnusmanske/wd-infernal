@@ -95,10 +95,12 @@ fn extract_local_name(ns: usize, record: &Value) -> Option<Record> {
         Value::Object(_) => cluster,
         _ => return None,
     };
-    let id = match cluster[nss(ns, "Document")]["about"].as_str() {
-        Some(id) => id.trim_end_matches('/').split('/').next_back()?.to_string(),
-        None => return None,
-    };
+    let id = cluster[nss(ns, "Document")]["about"]
+        .as_str()?
+        .trim_end_matches('/')
+        .split('/')
+        .next_back()?
+        .to_string();
     let main_headings = &cluster[nss(ns, "mainHeadings")][nss(ns, "data")];
     let main_headings = match main_headings {
         Value::Object(_) => vec![main_headings.to_owned()],
@@ -115,10 +117,9 @@ fn extract_local_name(ns: usize, record: &Value) -> Option<Record> {
             .iter()
             .filter_map(|h| RecordId::from_value(ns, h)),
     );
-    let label = match &cluster[nss(ns, "mainHeadings")][nss(ns, "data")][nss(ns, "text")].as_str() {
-        Some(text) => text.to_string(),
-        None => return None,
-    };
+    let label = cluster[nss(ns, "mainHeadings")][nss(ns, "data")][nss(ns, "text")]
+        .as_str()?
+        .to_string();
     let new_record = Record {
         id,
         label,

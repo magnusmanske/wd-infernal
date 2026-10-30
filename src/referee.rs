@@ -11,7 +11,6 @@ use std::{
     cell::OnceCell,
     cmp::Ordering,
     collections::{HashMap, HashSet},
-    net::IpAddr,
     sync::{Arc, LazyLock},
 };
 use tokio::sync::Semaphore;
@@ -110,43 +109,6 @@ const BAD_URLS: &[&str] = &[
     "www.google.com",
     "toolforge.org",
 ];
-
-/// Returns `true` if the IP address is in a private, loopback, link-local,
-/// or otherwise non-routable range that should never be fetched by the server.
-const fn is_private_ip(ip: &IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            let octets = v4.octets();
-            match octets {
-                [0, _, _, _] => true,                       // Current network
-                [10, _, _, _] => true,                      // Private 10.0.0.0/8
-                [127, _, _, _] => true,                     // Loopback 127.0.0.0/8
-                [169, 254, _, _] => true,                   // Link-local 169.254.0.0/16
-                [172, b, _, _] if (b & 0xF0) == 16 => true, // 172.16.0.0/12
-                [192, 168, _, _] => true,                   // Private 192.168.0.0/16
-                [100, b, _, _] if (b & 0xC0) == 64 => true, // CGNAT 100.64.0.0/10
-                _ => false,
-            }
-        }
-        IpAddr::V6(v6) => {
-            let segments = v6.segments();
-            // ::1 loopback
-            let is_loopback = segments[0] == 0
-                && segments[1] == 0
-                && segments[2] == 0
-                && segments[3] == 0
-                && segments[4] == 0
-                && segments[5] == 0
-                && segments[6] == 0
-                && segments[7] == 1;
-            // fc00::/7 unique-local
-            let is_unique_local = (segments[0] & 0xFE00) == 0xFC00;
-            // fe80::/10 link-local
-            let is_link_local = (segments[0] & 0xFFC0) == 0xFE80;
-            is_loopback || is_unique_local || is_link_local
-        }
-    }
-}
 
 // URLs with these parts for statements with these properties will not be loaded
 const BAD_PROP_STATEMENT: &[(&str, &str)] = &[
@@ -355,14 +317,14 @@ pub async fn init_referee() -> Result<()> {
 
 impl Referee {
     pub async fn new() -> Result<Self> {
-        let client = Client::builder()
-            .user_agent(
-                "Mozilla/5.0 (Windows; U; Windows NT 5.1; rv:1.7.3) Gecko/20041001 Firefox/0.10.1",
-            )
-            .timeout(FETCH_TIMEOUT)
-            .connect_timeout(std::time::Duration::from_secs(3))
-            .pool_max_idle_per_host(2)
-            .build()?;
+        let client = wikimisc::http::ssrf::client_builder_for(
+            wikimisc::http::ssrf::Target::Untrusted,
+            "Mozilla/5.0 (Windows; U; Windows NT 5.1; rv:1.7.3) Gecko/20041001 Firefox/0.10.1",
+        )
+        .timeout(FETCH_TIMEOUT)
+        .connect_timeout(std::time::Duration::from_secs(3))
+        .pool_max_idle_per_host(2)
+        .build()?;
 
         Ok(Self {
             api: Arc::new(crate::wikidata::Wikidata::client().api().await?),
@@ -408,21 +370,11 @@ impl Referee {
             return Err(anyhow!("Only https:// URLs are allowed"));
         }
 
-        // Resolve hostname to IP addresses and reject private/reserved ranges.
-        // Must be the async resolver: the blocking `ToSocketAddrs` equivalent stalls
-        // a whole tokio worker thread per lookup, which starves the runtime.
-        // url::Url already normalizes IPv6 hosts with brackets, e.g. "[::1]",
-        // which is the form `lookup_host` needs; port 443 is arbitrary.
-        let host = parsed
-            .host_str()
-            .ok_or_else(|| anyhow!("URL has no host"))?;
-        let mut ips = tokio::net::lookup_host(format!("{host}:443"))
-            .await
-            .map_err(|e| anyhow!("DNS resolution failed: {e}"))?;
-
-        if ips.any(|addr| is_private_ip(&addr.ip())) {
-            return Err(anyhow!("URL resolves to a private/reserved IP"));
-        }
+        // Blocked IP literals and non-HTTP schemes are refused before the
+        // request is issued; the guarded client's resolver covers hostnames
+        // (including a DNS record that points at a private address), and its
+        // redirect policy re-checks every hop.
+        wikimisc::http::ssrf::guard_url(url)?;
 
         Ok(())
     }
@@ -437,7 +389,7 @@ impl Referee {
 
         // Held for the whole exchange, so the number of open sockets stays bounded.
         let _permit = self.fetch_limit.acquire().await?;
-        let response = self.client.get(&url).send().await?;
+        let response = wikimisc::http::ssrf::get_guarded(&self.client, &url).await?;
         let status = response.status();
 
         if !status.is_success() {

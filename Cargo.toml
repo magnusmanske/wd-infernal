@@ -33,7 +33,7 @@ anyhow = "1"
 goodreads-metadata-scraper = "0.2"
 isbn = "0.8"
 wikibase_rest_api = "0.4"
-wikimisc = { version = "0.3", features = [
+wikimisc = { git = "https://github.com/magnusmanske/wikimisc", features = [
 	"database",
 	"date",
 	"entity-id",
@@ -43,6 +43,7 @@ wikimisc = { version = "0.3", features = [
 	"server",
 	"site-matrix",
 	"sparql-client",
+	"ssrf",
 	"telemetry",
 	"wikibase",
 	"wikidata",
