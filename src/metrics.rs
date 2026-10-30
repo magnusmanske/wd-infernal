@@ -4,7 +4,7 @@ use serde::Deserialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use utoipa;
-use wikimisc::telemetry::{Telemetry, TelemetryConfig};
+use wikimisc::telemetry::{self, TelemetryConfig};
 
 pub static TOTAL_REQUESTS: AtomicU64 = AtomicU64::new(0);
 pub static ERROR_RESPONSES: AtomicU64 = AtomicU64::new(0);
@@ -77,12 +77,11 @@ pub fn start_telemetry() {
         tracing::warn!("cannot read config.json: {e}");
         None
     });
-    Telemetry::builder("web")
-        .config(&telemetry_config(config.as_ref()))
-        .version(env!("CARGO_PKG_VERSION"))
-        // `wikimisc::server::serve` drains on SIGTERM and then sends the final push.
-        .handle_signals(false)
-        .install_or_log();
+    // `wikimisc::server::serve` drains on SIGTERM and then sends the final push.
+    telemetry::install_web(
+        env!("CARGO_PKG_VERSION"),
+        Some(&telemetry_config(config.as_ref())),
+    );
 }
 
 #[cfg(test)]

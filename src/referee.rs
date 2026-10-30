@@ -15,6 +15,7 @@ use std::{
 };
 use tokio::sync::Semaphore;
 use wikimisc::mediawiki::Api;
+use wikimisc::wiki::Wiki;
 use wikimisc::wikibase::{
     self, DataValueType, Entity, EntityTrait, Snak, SnakDataType, Statement,
     entity_container::EntityContainer,
@@ -679,19 +680,10 @@ impl Referee {
     }
 
     fn get_web_server_for_wiki(wiki: &str) -> String {
-        let lang = wiki.split("wik").next().unwrap_or("");
-
-        if wiki.ends_with("wiki") {
-            format!("{lang}.wikipedia.org")
-        } else if wiki.ends_with("wikisource") {
-            format!("{lang}.wikisource.org")
-        } else if wiki.ends_with("wiktionary") {
-            format!("{lang}.wiktionary.org")
-        } else if wiki.ends_with("wikiquote") {
-            format!("{lang}.wikiquote.org")
-        } else {
-            format!("{lang}.wikipedia.org") // Default fallback
-        }
+        Wiki::from_dbname(wiki).map_or_else(
+            |_| format!("{}.wikipedia.org", wiki.split("wik").next().unwrap_or("")),
+            |wiki| wiki.host().to_string(),
+        )
     }
 
     async fn get_candidate_urls(&self, entity: &str) -> Result<UniqueUrlCandidates> {

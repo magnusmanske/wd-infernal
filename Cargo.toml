@@ -46,8 +46,7 @@ wikimisc = { git = "https://github.com/magnusmanske/wikimisc", features = [
 	"ssrf",
 	"telemetry",
 	"wikibase",
-	"wikidata",
-] }
+	"wikidata", "wiki"] }
 tools_interface = "0.1"
 utoipa = { version = "6", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "10", features = ["axum"] }
