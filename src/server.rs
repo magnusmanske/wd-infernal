@@ -265,7 +265,7 @@ async fn cross_cats(
 )]
 async fn isbn_isbn(Path(isbn): Path<String>) -> Result<impl IntoResponse, StatusCode> {
     tracing::info!("isbn_isbn: {isbn}");
-    let mut isbn2wiki = ISBN2wiki::new(&isbn).ok_or_else(|| {
+    let isbn2wiki = ISBN2wiki::new(&isbn).ok_or_else(|| {
         tracing::warn!("isbn_isbn: invalid ISBN {isbn}");
         StatusCode::NOT_FOUND
     })?;
@@ -306,7 +306,7 @@ async fn isbn_item(Path(item): Path<String>) -> Result<impl IntoResponse, Status
 /// The item's ISBN data from all sources; `None` if the item has no ISBN, or
 /// upstream has no data.
 async fn isbn_data_for_item(item: &str) -> Option<ISBN2wiki> {
-    let Some(mut isbn2wiki) = ISBN2wiki::new_from_item(item).await else {
+    let Some(isbn2wiki) = ISBN2wiki::new_from_item(item).await else {
         tracing::info!("isbn_item: no ISBN loaded from {item}");
         return None;
     };

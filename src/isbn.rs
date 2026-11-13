@@ -1,39 +1,49 @@
-use crate::google_books::GoogleBooksFeed;
-use crate::open_library::OpenLibraryEdition;
 use crate::reference::{DataValue, Reference, ValueMatch};
 use anyhow::{Result, anyhow};
-use chrono::{DateTime, Datelike, Utc};
-use grscraper::MetadataRequestBuilder;
-use isbn::{Isbn10, Isbn13};
-use regex::Regex;
+use bookmeta::{Book, BookSources, Isbn, Source};
 use reqwest::Client;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
+use std::time::Duration;
 use wikibase_rest_api::prelude::*;
-use wikimisc::date::Date;
 use wikimisc::entity_id::ItemId;
 
-static RE_GOODREADS_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"/(\d+)\.jpg$").unwrap());
-/// Shared by the ISBN metadata sources.
-pub(crate) static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(|| {
-    wikimisc::http::client_builder(USER_AGENT)
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .expect("Failed to build ISBN HTTP client")
-});
 const USER_AGENT: &str = wikimisc::user_agent!(
     name = "WikidataInfernal",
     "https://wd-infernal.toolforge.org/; mailto:magnusmanske@toolforge.org"
 );
-static LANGUAGE_LABELS: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
-    let json_string = include_str!("../static/languages.json");
-    serde_json::from_str(json_string).unwrap()
+
+/// Shared by the ISBN metadata sources.
+static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(|| {
+    wikimisc::http::client_builder(USER_AGENT)
+        .timeout(Duration::from_secs(30))
+        .build()
+        .expect("Failed to build ISBN HTTP client")
 });
 
-#[derive(Debug, Default)]
+/// The catalogues queried for book metadata.
+///
+/// `bookmeta` can query more, but each enabled source is another outgoing
+/// request per lookup. Enable another source here and map its ID to a Wikidata
+/// property in [`ISBN2wiki::source_id`].
+static BOOK_SOURCES: LazyLock<BookSources> = LazyLock::new(|| {
+    BookSources::new(HTTP_CLIENT.clone())
+        .with_timeout(Duration::from_secs(30))
+        .without_all([
+            Source::Dnb,
+            Source::K10plus,
+            Source::Loc,
+            Source::Bnf,
+            Source::Bne,
+            Source::Kb,
+            Source::Ndl,
+            Source::Crossref,
+        ])
+});
+
+#[derive(Debug)]
 pub struct ISBN2wiki {
-    pub isbn10: Option<Isbn10>,
-    pub isbn13: Option<Isbn13>,
+    isbn: Isbn,
     pub values: Mutex<HashMap<String, HashMap<DataValue, HashSet<Reference>>>>,
     /// The item's current statements, when created from an item; patches are
     /// generated against these, so existing values get references, not duplicates.
@@ -44,17 +54,8 @@ pub struct ISBN2wiki {
 
 impl ISBN2wiki {
     pub fn new(isbn: &str) -> Option<Self> {
-        let isbn_digits = Self::str2digits(isbn);
-        let isbn_10: Option<[u8; 10]> = Self::vec2array(isbn_digits.clone()).ok();
-        let isbn_13: Option<[u8; 13]> = Self::vec2array(isbn_digits).ok();
-        let mut ret = ISBN2wiki {
-            isbn10: isbn_10.and_then(|isbn_array| Isbn10::new(isbn_array).ok()),
-            isbn13: isbn_13.and_then(|isbn_array| Isbn13::new(isbn_array).ok()),
-            ..Default::default()
-        };
-
-        ret.add_isbn_values_as_statements()?;
-
+        let ret = Self::with_isbn(Isbn::parse(isbn).ok()?);
+        ret.add_isbn_values_as_statements();
         Some(ret)
     }
 
@@ -63,200 +64,144 @@ impl ISBN2wiki {
         let entity_id = EntityId::item(item.to_string());
         let api = RestApi::wikidata().ok()?;
         let statements = Statements::get(&entity_id, &api).await.ok()?;
-        let isbn10 = Self::extract_isbn_string(&statements, "P957")
-            .and_then(|digits| Self::vec2array(digits).ok())
-            .and_then(|arr| Isbn10::new(arr).ok());
-        let isbn13 = Self::extract_isbn_string(&statements, "P212")
-            .and_then(|digits| Self::vec2array(digits).ok())
-            .and_then(|arr| Isbn13::new(arr).ok());
+        let isbn = Self::extract_isbn(&statements)?;
 
-        if isbn10.is_none() && isbn13.is_none() {
-            return None;
-        }
-
-        let mut ret = ISBN2wiki {
-            isbn10,
-            isbn13,
+        let ret = Self {
             existing: statements,
-            ..Default::default()
+            ..Self::with_isbn(isbn)
         };
-
-        ret.add_isbn_values_as_statements()?;
+        ret.add_isbn_values_as_statements();
 
         Some(ret)
     }
 
-    fn extract_isbn_string(statements: &Statements, property: &str) -> Option<Vec<u8>> {
-        statements
-            .statements()
-            .iter()
-            .filter(|(prop, _s)| *prop == property)
-            .filter_map(|(_prop, s)| s.first())
-            .filter_map(|s| match s.value() {
-                StatementValue::Value(StatementValueContent::String(s)) => Some(s),
-                _ => None,
-            })
-            .map(|s| Self::str2digits(s))
-            .next()
-    }
-
-    fn vec2array<T, const N: usize>(v: Vec<T>) -> Result<[T; N]> {
-        v.try_into().map_err(|_| anyhow!("Wrong length"))
-    }
-
-    // Return ISBN13, fallback to ISBN10 if ISBN13 is not available
-    pub fn isbn(&self) -> Option<String> {
-        match self.isbn13 {
-            Some(isbn) => Some(isbn.hyphenate().ok()?.to_string()),
-            None => self
-                .isbn10
-                .and_then(|isbn| isbn.hyphenate().ok())
-                .map(|s| s.to_string()),
+    fn with_isbn(isbn: Isbn) -> Self {
+        Self {
+            isbn,
+            values: Mutex::default(),
+            existing: Statements::default(),
+            existing_items: Mutex::default(),
         }
     }
 
-    /// The ISBN as returned by `isbn()`, without hyphens, for source queries.
-    pub fn isbn_digits(&self) -> Result<String> {
-        Ok(self
-            .isbn()
-            .ok_or_else(|| anyhow!("No ISBN found"))?
-            .replace('-', ""))
+    fn extract_isbn(statements: &Statements) -> Option<Isbn> {
+        ["P212", "P957"].into_iter().find_map(|property| {
+            statements
+                .statements()
+                .iter()
+                .filter(|(prop, _statements)| *prop == property)
+                .filter_map(|(_prop, statements)| statements.first())
+                .find_map(|statement| match statement.value() {
+                    StatementValue::Value(StatementValueContent::String(value)) => {
+                        Isbn::parse(value).ok()
+                    }
+                    _ => None,
+                })
+        })
     }
 
-    /// Queries all sources. Succeeds if at least one of them did, so that one
-    /// source lacking the book (or being down) does not discard the others' data.
-    pub async fn retrieve(&mut self) -> Result<()> {
-        let (goodreads, google_books, open_library) = futures::join!(
-            self.load_from_goodreads(),
-            GoogleBooksFeed::load_from_google_books(self),
-            OpenLibraryEdition::load(self),
-        );
-        Self::any_source_succeeded([
-            ("Goodreads", goodreads),
-            ("Google Books", google_books),
-            ("Open Library", open_library),
-        ])
-    }
-
-    fn any_source_succeeded<const N: usize>(results: [(&str, Result<()>); N]) -> Result<()> {
-        let mut any_ok = false;
-        for (source, result) in results {
-            match result {
-                Ok(()) => any_ok = true,
-                Err(e) => tracing::info!("{source} lookup failed: {e}"),
-            }
-        }
-        if any_ok {
-            Ok(())
-        } else {
-            Err(anyhow!("No source returned metadata"))
-        }
-    }
-
-    async fn load_from_goodreads(&self) -> Result<()> {
-        let isbn = self.isbn_digits()?;
-        let metadata = MetadataRequestBuilder::default()
-            .with_isbn(&isbn)
-            .execute()
-            .await
-            .map_err(|_e| anyhow!("Failed to retrieve metadata"))?
-            .ok_or(anyhow!("No metadata found"))?;
-
-        let goodreads_thumbnail_url = match metadata.image_url {
-            Some(url) => url,
-            None => return Err(anyhow!("No ID found")),
-        };
-        let goodreads_work_id = match RE_GOODREADS_ID.captures(goodreads_thumbnail_url.as_str()) {
-            Some(captures) => {
-                if let Some(first_group) = captures.get(1) {
-                    first_group.as_str().to_string()
-                } else {
-                    return Err(anyhow!("No ID found"));
-                }
-            }
-            None => return Err(anyhow!("No ID found")),
-        };
-
-        self.add_reference(
-            "P8383",
-            DataValue::String(goodreads_work_id.to_owned()),
-            Reference::default(),
-        );
-
-        if let Some(publication_date) = metadata.publication_date.and_then(Self::goodreads_date) {
-            self.add_reference(
-                "P577",
-                publication_date,
-                Reference::prop("P8383", &goodreads_work_id),
+    /// Queries all sources. Succeeds if at least one of them returned data, so
+    /// that one source lacking the book (or being down) does not discard the
+    /// others' data.
+    pub async fn retrieve(&self) -> Result<()> {
+        let lookup = BOOK_SOURCES.lookup(&self.isbn).await;
+        for failure in &lookup.failures {
+            tracing::info!(
+                "{} lookup failed: {}",
+                failure.source.label(),
+                failure.message
             );
         }
-
-        for contributor in metadata.contributors {
-            if contributor.role == "Author" {
-                self.add_reference(
-                    "P2093",
-                    DataValue::String(contributor.name.to_owned()),
-                    Reference::prop("P8383", &goodreads_work_id),
-                );
-            }
+        for book in &lookup.books {
+            self.add_book(book);
         }
-
-        if let Some(pages) = metadata.page_count {
-            self.add_reference(
-                "P1104",
-                DataValue::Quantity(pages),
-                Reference::prop("P8383", &goodreads_work_id),
-            );
+        for item in &lookup.wikidata {
+            self.add_existing_item(&item.id);
         }
-
-        let language_code = metadata
-            .language
-            .as_ref()
-            .map_or("", |language| match LANGUAGE_LABELS.get(language) {
-                Some(code) => code,
-                None => "",
-            });
-
-        if !language_code.is_empty() {
-            self.add_reference(
-                "P1476",
-                DataValue::Monolingual {
-                    label: metadata.title.to_owned(),
-                    language: language_code.to_owned(),
-                },
-                Reference::prop("P8383", &goodreads_work_id),
-            );
-
-            if let Some(subtitle) = &metadata.subtitle {
-                self.add_reference(
-                    "P1680",
-                    DataValue::Monolingual {
-                        label: subtitle.to_owned(),
-                        language: language_code.to_owned(),
-                    },
-                    Reference::prop("P8383", &goodreads_work_id),
-                );
-            }
+        if lookup.books.is_empty() && lookup.wikidata.is_empty() {
+            return Err(anyhow!("No source returned metadata"));
         }
-
         Ok(())
     }
 
-    /// A Goodreads publication timestamp as a date. 1 January stands for a
-    /// date of which only the year is known.
-    fn goodreads_date(timestamp: DateTime<Utc>) -> Option<DataValue> {
-        let year = i64::from(timestamp.year());
-        let month = u8::try_from(timestamp.month()).ok()?;
-        let day = u8::try_from(timestamp.day()).ok()?;
-        let date = if (month, day) == (1, 1) {
-            Date::new(year, None, None)
-        } else {
-            Date::new(year, Some(month), Some(day))
-        };
-        DataValue::date(&date.ok()?)
+    /// The source's own identifier for the edition, and the Wikidata property
+    /// it belongs in. It references the source's other statements.
+    fn source_id(book: &Book) -> Option<(&'static str, &str)> {
+        match book.source {
+            Source::GoogleBooks => book.ids.google_books.as_deref().map(|id| ("P675", id)),
+            Source::OpenLibrary => book.ids.open_library.as_deref().map(|id| ("P648", id)),
+            Source::Goodreads => book.ids.goodreads.as_deref().map(|id| ("P2969", id)),
+            _ => None,
+        }
     }
 
-    pub fn add_existing_item(&self, item_id: &str) {
+    fn add_book(&self, book: &Book) {
+        let Some((id_property, id)) = Self::source_id(book) else {
+            return;
+        };
+        self.add_reference(
+            id_property,
+            DataValue::String(id.to_string()),
+            Reference::none(),
+        );
+        let reference = Reference::prop(id_property, id);
+
+        self.add_reference(
+            "P31",
+            DataValue::Entity("Q571".to_string()),
+            reference.clone(),
+        );
+
+        if let Some(language) = &book.language {
+            if !book.title.trim().is_empty() {
+                self.add_reference(
+                    "P1476",
+                    DataValue::Monolingual {
+                        label: book.title.clone(),
+                        language: language.clone(),
+                    },
+                    reference.clone(),
+                );
+            }
+            if let Some(subtitle) = book
+                .subtitle
+                .as_deref()
+                .map(str::trim)
+                .filter(|subtitle| !subtitle.is_empty())
+            {
+                self.add_reference(
+                    "P1680",
+                    DataValue::Monolingual {
+                        label: subtitle.to_string(),
+                        language: language.clone(),
+                    },
+                    reference.clone(),
+                );
+            }
+        }
+
+        for author in &book.authors {
+            self.add_reference(
+                "P2093",
+                DataValue::String(author.clone()),
+                reference.clone(),
+            );
+        }
+
+        if let Some(pages) = book.pages {
+            self.add_reference(
+                "P1104",
+                DataValue::Quantity(i64::from(pages)),
+                reference.clone(),
+            );
+        }
+
+        if let Some(year) = DataValue::year(&book.year) {
+            self.add_reference("P577", year, reference);
+        }
+    }
+
+    fn add_existing_item(&self, item_id: &str) {
         if item_id.parse::<ItemId>().is_ok() {
             let mut items = self
                 .existing_items
@@ -286,25 +231,19 @@ impl ISBN2wiki {
             .insert(reference);
     }
 
-    fn add_isbn_values_as_statements(&mut self) -> Option<()> {
-        if self.isbn10.is_none() && self.isbn13.is_none() {
-            return None;
-        }
-        if let Some(isbn) = self.isbn10 {
+    fn add_isbn_values_as_statements(&self) {
+        self.add_reference(
+            "P212",
+            DataValue::String(self.isbn.isbn13_hyphenated()),
+            Reference::none(), // No reference for ISBN
+        );
+        if let Some(isbn10) = self.isbn.isbn10_hyphenated() {
             self.add_reference(
                 "P957",
-                DataValue::String(isbn.hyphenate().ok()?.to_string()),
-                Reference::default(), // No reference for ISBN
+                DataValue::String(isbn10),
+                Reference::none(), // No reference for ISBN
             );
         }
-        if let Some(isbn) = self.isbn13 {
-            self.add_reference(
-                "P212",
-                DataValue::String(isbn.hyphenate().ok()?.to_string()),
-                Reference::default(), // No reference for ISBN
-            );
-        }
-        Some(())
     }
 
     pub fn generate_item(&self) -> Result<Item> {
@@ -414,18 +353,33 @@ impl ISBN2wiki {
             }
         }
     }
-
-    fn str2digits(isbn: &str) -> Vec<u8> {
-        isbn.chars()
-            .filter_map(|c| c.to_digit(10))
-            .map(|c| c as u8)
-            .collect::<Vec<u8>>()
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wikibase_rest_api::prelude::TimePrecision;
+
+    fn book(source: Source) -> Book {
+        let mut book = Book::new(source);
+        book.title = "A title".to_string();
+        book.subtitle = Some("A subtitle".to_string());
+        book.authors = vec!["An author".to_string()];
+        book.year = "1988".to_string();
+        book.language = Some("en".to_string());
+        book.pages = Some(96);
+        book
+    }
+
+    fn values(isbn2wiki: &ISBN2wiki) -> HashMap<String, Vec<DataValue>> {
+        isbn2wiki
+            .values
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(property, values)| (property.clone(), values.keys().cloned().collect()))
+            .collect()
+    }
 
     #[tokio::test]
     async fn test_new_from_item_rejects_bad_item() {
@@ -434,109 +388,37 @@ mod tests {
         }
     }
 
-    // ── goodreads_date ────────────────────────────────────────────────────────
-
-    #[test]
-    fn test_goodreads_date() {
-        let date = |s: &str| ISBN2wiki::goodreads_date(s.parse().unwrap());
-        assert_eq!(
-            date("2003-05-12T07:00:00Z"),
-            Some(DataValue::Date {
-                time: "+2003-05-12T00:00:00Z".to_string(),
-                precision: TimePrecision::Day,
-            })
-        );
-        // 1 January means only the year is known.
-        assert_eq!(
-            date("2003-01-01T08:00:00Z"),
-            Some(DataValue::Date {
-                time: "+2003-00-00T00:00:00Z".to_string(),
-                precision: TimePrecision::Year,
-            })
-        );
-    }
-
-    // ── any_source_succeeded ──────────────────────────────────────────────────
-
-    #[test]
-    fn test_any_source_succeeded_tolerates_partial_failure() {
-        let results = [("a", Err(anyhow!("down"))), ("b", Ok(()))];
-        assert!(ISBN2wiki::any_source_succeeded(results).is_ok());
-    }
-
-    #[test]
-    fn test_any_source_succeeded_fails_if_all_fail() {
-        let results = [("a", Err(anyhow!("down"))), ("b", Err(anyhow!("down")))];
-        assert!(ISBN2wiki::any_source_succeeded(results).is_err());
-    }
-
-    // ── str2digits ────────────────────────────────────────────────────────────
-
-    #[test]
-    fn test_str2digits_plain_digits() {
-        assert_eq!(
-            ISBN2wiki::str2digits("1234567890"),
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0]
-        );
-    }
-
-    #[test]
-    fn test_str2digits_strips_hyphens_and_spaces() {
-        assert_eq!(
-            ISBN2wiki::str2digits("978-2-267-02700-6"),
-            vec![9, 7, 8, 2, 2, 6, 7, 0, 2, 7, 0, 0, 6],
-        );
-    }
-
-    #[test]
-    fn test_str2digits_strips_letters() {
-        // Letters that are not digits must be silently dropped
-        assert_eq!(ISBN2wiki::str2digits("ISBN 123"), vec![1, 2, 3]);
-    }
-
-    #[test]
-    fn test_str2digits_empty_string() {
-        assert_eq!(ISBN2wiki::str2digits(""), Vec::<u8>::new());
-    }
-
     // ── ISBN2wiki::new ────────────────────────────────────────────────────────
 
     #[test]
-    fn test_new_isbn13_valid() {
-        let isbn2wiki = ISBN2wiki::new("9782267027006").expect("valid ISBN-13 should produce Some");
-        // isbn13 must be populated
-        assert!(isbn2wiki.isbn13.is_some(), "isbn13 should be set");
-        // isbn() returns the hyphenated ISBN-13
-        let isbn = isbn2wiki
-            .isbn()
-            .expect("isbn() must return Some for a valid ISBN-13");
-        assert!(
-            isbn.contains('-'),
-            "hyphenated ISBN-13 must contain hyphens"
-        );
-        assert!(isbn.starts_with("978"), "ISBN-13 must start with 978");
+    fn test_new_valid_isbn13() {
+        let isbn2wiki = ISBN2wiki::new("9782267027006").expect("valid ISBN-13");
+        assert_eq!(isbn2wiki.isbn.isbn13_digits(), "9782267027006");
+        assert_eq!(isbn2wiki.isbn.isbn13_hyphenated(), "978-2-267-02700-6");
     }
 
     #[test]
-    fn test_new_isbn10_valid() {
-        // "2267027003" is the ISBN-10 for the same book as above
-        let isbn2wiki = ISBN2wiki::new("2267027003").expect("valid ISBN-10 should produce Some");
-        assert!(isbn2wiki.isbn10.is_some(), "isbn10 should be set");
+    fn test_new_valid_isbn10_normalises_to_both_forms() {
+        let isbn2wiki = ISBN2wiki::new("2267027003").expect("valid ISBN-10");
+        assert_eq!(isbn2wiki.isbn.isbn13_digits(), "9782267027006");
+        assert_eq!(
+            isbn2wiki.isbn.isbn10_digits().as_deref(),
+            Some("2267027003")
+        );
     }
 
     #[test]
     fn test_new_hyphenated_isbn13() {
-        // Constructor must accept pre-hyphenated input
-        let isbn2wiki =
-            ISBN2wiki::new("978-2-267-02700-6").expect("hyphenated ISBN-13 should be accepted");
-        assert!(isbn2wiki.isbn13.is_some());
+        let isbn2wiki = ISBN2wiki::new("978-2-267-02700-6").expect("hyphenated ISBN-13");
+        assert_eq!(isbn2wiki.isbn.isbn13_digits(), "9782267027006");
     }
 
     #[test]
     fn test_new_invalid_returns_none() {
-        // All-zeros is not a valid ISBN
+        // Bad check digit. (A checksum-valid but unregistered ISBN, such as
+        // all zeros, is accepted with its digits as the display form.)
         assert!(
-            ISBN2wiki::new("0000000000000").is_none(),
+            ISBN2wiki::new("9780140328722").is_none(),
             "invalid ISBN must return None"
         );
     }
@@ -551,39 +433,171 @@ mod tests {
 
     #[test]
     fn test_new_populates_isbn_statements() {
-        // After construction, values must already contain ISBN property entries
         let isbn2wiki = ISBN2wiki::new("9782267027006").unwrap();
+        let values = values(&isbn2wiki);
+        let isbn = Isbn::parse("9782267027006").unwrap();
+        assert_eq!(
+            values["P212"],
+            [DataValue::String(isbn.isbn13_hyphenated())]
+        );
+        assert_eq!(
+            values["P957"],
+            [DataValue::String(isbn.isbn10_hyphenated().unwrap())]
+        );
+    }
+
+    // ── extract_isbn ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_extract_isbn_reads_p212() {
+        let statement = |property: &str, value: &str| {
+            serde_json::json!({
+                "id": "Q1$1",
+                "property": {"id": property},
+                "value": {"type": "value", "content": value},
+                "rank": "normal",
+                "qualifiers": [],
+                "references": []
+            })
+        };
+        let statements = Statements::from_json(&serde_json::json!({
+            "P212": [statement("P212", "978-2-267-02700-6")],
+        }))
+        .unwrap();
+        let isbn = ISBN2wiki::extract_isbn(&statements).unwrap();
+        assert_eq!(isbn.isbn13_digits(), "9782267027006");
+    }
+
+    #[test]
+    fn test_extract_isbn_falls_back_to_p957() {
+        let statement = |property: &str, value: &str| {
+            serde_json::json!({
+                "id": "Q1$1",
+                "property": {"id": property},
+                "value": {"type": "value", "content": value},
+                "rank": "normal",
+                "qualifiers": [],
+                "references": []
+            })
+        };
+        let statements = Statements::from_json(&serde_json::json!({
+            "P957": [statement("P957", "2-267-02700-3")],
+        }))
+        .unwrap();
+        let isbn = ISBN2wiki::extract_isbn(&statements).unwrap();
+        assert_eq!(isbn.isbn13_digits(), "9782267027006");
+    }
+
+    // ── source_id / add_book ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_source_id_maps_enabled_sources() {
+        let mut google = book(Source::GoogleBooks);
+        google.ids.google_books = Some("abc".to_string());
+        assert_eq!(ISBN2wiki::source_id(&google), Some(("P675", "abc")));
+
+        let mut open_library = book(Source::OpenLibrary);
+        open_library.ids.open_library = Some("OL1M".to_string());
+        assert_eq!(ISBN2wiki::source_id(&open_library), Some(("P648", "OL1M")));
+
+        let mut goodreads = book(Source::Goodreads);
+        goodreads.ids.goodreads = Some("123".to_string());
+        assert_eq!(ISBN2wiki::source_id(&goodreads), Some(("P2969", "123")));
+
+        assert_eq!(ISBN2wiki::source_id(&book(Source::Dnb)), None);
+    }
+
+    #[test]
+    fn test_add_book_maps_metadata() {
+        let isbn2wiki = ISBN2wiki::new("9782267027006").unwrap();
+        let mut google = book(Source::GoogleBooks);
+        google.ids.google_books = Some("abc".to_string());
+        isbn2wiki.add_book(&google);
+
+        let values = values(&isbn2wiki);
+        assert_eq!(values["P675"], [DataValue::String("abc".to_string())]);
+        assert_eq!(values["P31"], [DataValue::Entity("Q571".to_string())]);
+        assert_eq!(
+            values["P1476"],
+            [DataValue::Monolingual {
+                label: "A title".to_string(),
+                language: "en".to_string(),
+            }]
+        );
+        assert_eq!(
+            values["P1680"],
+            [DataValue::Monolingual {
+                label: "A subtitle".to_string(),
+                language: "en".to_string(),
+            }]
+        );
+        assert_eq!(
+            values["P2093"],
+            [DataValue::String("An author".to_string())]
+        );
+        assert_eq!(values["P1104"], [DataValue::Quantity(96)]);
+        assert_eq!(
+            values["P577"],
+            [DataValue::Date {
+                time: "+1988-00-00T00:00:00Z".to_string(),
+                precision: TimePrecision::Year,
+            }]
+        );
+    }
+
+    #[test]
+    fn test_add_book_references_metadata_by_source_id() {
+        let isbn2wiki = ISBN2wiki::new("9782267027006").unwrap();
+        let mut google = book(Source::GoogleBooks);
+        google.ids.google_books = Some("abc".to_string());
+        isbn2wiki.add_book(&google);
+
         let values = isbn2wiki.values.lock().unwrap();
-        // P212 = ISBN-13
-        assert!(
-            values.contains_key("P212"),
-            "values should contain P212 (ISBN-13) after construction"
+        let title = DataValue::Monolingual {
+            label: "A title".to_string(),
+            language: "en".to_string(),
+        };
+        assert_eq!(
+            values["P1476"][&title],
+            HashSet::from([Reference::prop("P675", "abc")])
         );
     }
 
-    // ── isbn() fallback ───────────────────────────────────────────────────────
-
     #[test]
-    fn test_isbn_prefers_isbn13_over_isbn10() {
-        // When both are available the ISBN-13 should be returned
+    fn test_add_book_ignores_sources_without_id_mapping() {
         let isbn2wiki = ISBN2wiki::new("9782267027006").unwrap();
-        let isbn = isbn2wiki.isbn().unwrap();
-        // ISBN-13 always starts with a 3-digit prefix
-        assert!(
-            isbn.starts_with("978") || isbn.starts_with("979"),
-            "isbn() should prefer ISBN-13"
-        );
+        let mut dnb = book(Source::Dnb);
+        dnb.ids.dnb = Some("123".to_string());
+        isbn2wiki.add_book(&dnb);
+
+        let values = values(&isbn2wiki);
+        // Only the two ISBN statements from `new`.
+        assert_eq!(values.len(), 2);
+        assert!(!values.contains_key("P31"));
     }
 
     #[test]
-    fn test_isbn_falls_back_to_isbn10_when_no_isbn13() {
-        // An ISBN-10 that cannot be represented as ISBN-13 due to length will only set isbn10
-        let isbn2wiki = ISBN2wiki::new("2267027003").unwrap();
-        // If isbn13 happened to be parsed, that is fine; the important thing is isbn() is Some
-        assert!(
-            isbn2wiki.isbn().is_some(),
-            "isbn() must return Some when at least one is set"
-        );
+    fn test_add_book_needs_a_language_for_titles() {
+        let isbn2wiki = ISBN2wiki::new("9782267027006").unwrap();
+        let mut google = book(Source::GoogleBooks);
+        google.ids.google_books = Some("abc".to_string());
+        google.language = None;
+        isbn2wiki.add_book(&google);
+
+        let values = values(&isbn2wiki);
+        assert!(!values.contains_key("P1476"));
+        assert!(!values.contains_key("P1680"));
+        assert!(values.contains_key("P2093"));
+    }
+
+    // ── existing_items ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_add_existing_item_validates() {
+        let isbn2wiki = ISBN2wiki::new("9782267027006").unwrap();
+        isbn2wiki.add_existing_item("Q1234");
+        isbn2wiki.add_existing_item("not an item");
+        assert_eq!(isbn2wiki.existing_items(), ["Q1234"]);
     }
 
     // ── add_reference ─────────────────────────────────────────────────────────
@@ -666,30 +680,6 @@ mod tests {
         );
     }
 
-    // ── vec2array ────────────────────────────────────────────────────────────
-
-    #[test]
-    fn test_vec2array_correct_length() {
-        let v = vec![1_u8, 2, 3];
-        let result: Result<[u8; 3]> = ISBN2wiki::vec2array(v);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), [1, 2, 3]);
-    }
-
-    #[test]
-    fn test_vec2array_wrong_length() {
-        let v = vec![1_u8, 2];
-        let result: Result<[u8; 3]> = ISBN2wiki::vec2array(v);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_vec2array_empty() {
-        let v: Vec<u8> = vec![];
-        let result: Result<[u8; 0]> = ISBN2wiki::vec2array(v);
-        assert!(result.is_ok());
-    }
-
     // ── generate_patch ───────────────────────────────────────────────────────
 
     #[test]
@@ -725,6 +715,7 @@ mod tests {
             })
         };
         let existing = Statements::from_json(&serde_json::json!({
+            "P212": [statement("0", "P212", "978-84-226-4891-8".into())],
             "P957": [statement("1", "P957", "84-226-4891-1".into())],
             "P1104": [statement("2", "P1104", serde_json::json!({"amount": "+515", "unit": "1"}))],
             "P577": [statement("3", "P577", serde_json::json!({
@@ -736,7 +727,7 @@ mod tests {
         .unwrap();
         let isbn2wiki = ISBN2wiki {
             existing,
-            ..ISBN2wiki::new("8422648911").unwrap()
+            ..ISBN2wiki::new("84-226-4891-1").unwrap()
         };
         let source = Reference::prop("P648", "OL1M");
         let year_2014 = DataValue::Date {
@@ -761,7 +752,7 @@ mod tests {
             })
             .collect();
         ops.sort();
-        // Existing ISBN: untouched. Same page count: referenced. Year of an
+        // Existing ISBNs: untouched. Same page count: referenced. Year of an
         // existing month: skipped. New ID: added.
         assert_eq!(
             ops,
@@ -770,17 +761,5 @@ mod tests {
                 "add /statements/P648/-",
             ]
         );
-    }
-
-    // ── isbn fallback for None ───────────────────────────────────────────────
-
-    #[test]
-    fn test_isbn_returns_none_when_both_missing() {
-        let isbn2wiki = ISBN2wiki {
-            isbn10: None,
-            isbn13: None,
-            ..Default::default()
-        };
-        assert!(isbn2wiki.isbn().is_none());
     }
 }

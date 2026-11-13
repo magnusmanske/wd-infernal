@@ -17,7 +17,6 @@ axum = { version = "0.8", features = [
 ] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-quick-xml = { version = "0.37", features = ["serialize"] }
 tracing = "0.1"
 tower-http = { version = "0.6", features = ["full"] }
 moka = { version = "0.12", features = ["sync"] }
@@ -27,11 +26,9 @@ regex = "1"
 reqwest = { version = "0.13", features = ["json"] }
 # Already used by reqwest; decodes the size-capped pages in src/referee.rs.
 encoding_rs = "0.8"
-chrono = "0.4"
 urlencoding = "2"
 anyhow = "1"
-goodreads-metadata-scraper = "0.2"
-isbn = "0.8"
+bookmeta = "0.1"
 wikibase_rest_api = "0.4"
 wikimisc = { git = "https://github.com/magnusmanske/wikimisc", features = [
 	"database",

@@ -54,12 +54,10 @@ pub mod change_wiki;
 pub mod crosscats;
 pub mod database;
 pub mod given_names;
-pub mod google_books;
 pub mod initial_search;
 pub mod isbn;
 pub mod location;
 pub mod metrics;
-pub mod open_library;
 pub mod person;
 pub mod referee;
 pub mod reference;
@@ -90,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "isbn" => {
                 let item_id = std::env::args().nth(2).unwrap();
-                let mut isbn2wiki = isbn::ISBN2wiki::new_from_item(&item_id).await.unwrap();
+                let isbn2wiki = isbn::ISBN2wiki::new_from_item(&item_id).await.unwrap();
                 isbn2wiki.retrieve().await.unwrap();
                 let patch = isbn2wiki.generate_patch(&item_id).unwrap();
                 println!("{}", json!(patch.patch()));
