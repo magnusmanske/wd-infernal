@@ -51,8 +51,23 @@ fn class_bit(qid: &str) -> u8 {
 }
 
 /// Internal result type from `db_lookup` / `api_lookup` — a `HashMap` is
-/// the natural return type before inserting into the shared cache.
+/// the natural return type before inserting into the shared cache. Keys are
+/// the lowercased name tokens (see [`Person::token_query`]).
 type NameHitMap = HashMap<String, Vec<NameHit>>;
+
+/// At most this many distinct tokens are looked up per request. A real name
+/// has a handful; a much longer one is abuse, and every token becomes a
+/// placeholder in the term-store query.
+const MAX_LOOKUP_TOKENS: usize = 20;
+
+/// One name token to look up: the case-insensitive key shared by the cache
+/// and the result, and the spellings to try in the term store, whose term
+/// text matches case-sensitively.
+#[derive(Debug)]
+struct TokenQuery {
+    key: String,
+    spellings: Vec<String>,
+}
 
 /// Process-wide cache mapping a name token (as queried) to its matched items.
 /// This avoids re-querying the database for names seen in earlier requests.
@@ -133,44 +148,106 @@ impl Person {
         (tokens[..start].to_vec(), tokens[start..].to_vec())
     }
 
-    /// Look up all the given tokens, returning a map from token to matched name
-    /// items. Results are served from (and stored in) the process cache; cache
+    /// Look up all the given tokens, returning a map keyed by the lowercased
+    /// token. Results are served from (and stored in) the process cache; cache
     /// misses are fetched from the Toolforge DB, falling back to the Wikidata
     /// API when no DB connection is available.
     async fn gather_hits(tokens: &[&str]) -> NameHitMap {
-        let mut result: HashMap<String, Vec<NameHit>> = HashMap::new();
-        let mut misses: Vec<String> = vec![];
-        for &token in tokens {
-            if let Some(hits) = NAME_CACHE.get(token) {
-                result.insert(token.to_string(), hits.clone());
-            } else if !misses.iter().any(|m| m == token) {
-                misses.push(token.to_string());
+        let mut result: NameHitMap = HashMap::new();
+        let mut misses: Vec<TokenQuery> = Vec::new();
+        for query in Self::token_queries(tokens) {
+            match NAME_CACHE.get(query.key.as_str()) {
+                Some(hits) => {
+                    result.insert(query.key, hits);
+                }
+                None => misses.push(query),
             }
         }
         if misses.is_empty() {
             return result;
         }
 
-        // Prefer the database; fall back to the API. Only cache results we are
-        // confident about, so a transient connectivity failure does not poison
-        // the cache with spurious negatives.
-        let (fetched, allow_cache) = match Self::db_lookup(&misses).await {
-            Ok(map) => (map, true),
+        // Prefer the database; fall back to the API. The database either
+        // worked for every token or not at all; the API reports per token
+        // whether every request succeeded. Only cache results we are
+        // confident about, so a transient failure does not poison the cache
+        // with spurious negatives.
+        let (fetched, cacheable) = match Self::db_lookup(&misses).await {
+            Ok(map) => (map, None),
             Err(_) => {
-                let map = Self::api_lookup(&misses).await;
-                let any = map.values().any(|hits| !hits.is_empty());
-                (map, any)
+                tracing::warn!("name lookup failed, falling back to the Wikidata API");
+                let (map, cacheable) = Self::api_lookup(&misses).await;
+                (map, Some(cacheable))
             }
         };
 
-        for token in &misses {
-            let hits = fetched.get(token).cloned().unwrap_or_default();
-            if allow_cache {
-                NAME_CACHE.insert(token.clone(), hits.clone());
+        for query in &misses {
+            let hits = fetched.get(&query.key).cloned().unwrap_or_default();
+            let cache = cacheable
+                .as_ref()
+                .is_none_or(|cacheable| cacheable.contains(&query.key));
+            if cache {
+                NAME_CACHE.insert(query.key.clone(), hits.clone());
             }
-            result.insert(token.clone(), hits);
+            result.insert(query.key.clone(), hits);
         }
         result
+    }
+
+    /// Deduplicated [`TokenQuery`]s for `tokens`, in order, capped at
+    /// [`MAX_LOOKUP_TOKENS`].
+    fn token_queries(tokens: &[&str]) -> Vec<TokenQuery> {
+        let mut queries = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        for &token in tokens {
+            if queries.len() >= MAX_LOOKUP_TOKENS {
+                break;
+            }
+            let query = Self::token_query(token);
+            if seen.insert(query.key.clone()) {
+                queries.push(query);
+            }
+        }
+        queries
+    }
+
+    /// The lookup for one token. Wikidata's term store matches text
+    /// case-sensitively, so the spellings include the forms a name is likely
+    /// written in; they are queried together. The key is lowercased, so
+    /// differently-cased requests share a cache entry and a result.
+    fn token_query(token: &str) -> TokenQuery {
+        let lower = token.to_lowercase();
+        // Labels are usually title-cased, nobiliary particles excepted.
+        let title = lower
+            .split(' ')
+            .map(|word| {
+                if SURNAME_PARTICLES.contains(word) {
+                    word.to_string()
+                } else {
+                    Self::capitalize(word)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut spellings = vec![token.to_string(), lower.clone()];
+        for spelling in [title, Self::capitalize(token), Self::capitalize(&lower)] {
+            if !spellings.contains(&spelling) {
+                spellings.push(spelling);
+            }
+        }
+        TokenQuery {
+            key: lower,
+            spellings,
+        }
+    }
+
+    /// `text` with its first character uppercased.
+    fn capitalize(text: &str) -> String {
+        let mut chars = text.chars();
+        match chars.next() {
+            Some(first) => first.to_uppercase().chain(chars).collect(),
+            None => String::new(),
+        }
     }
 
     /// Fetch name items for `tokens` directly from the Toolforge replicas.
@@ -179,10 +256,22 @@ impl Person {
     /// cross-server SQL JOIN impossible. The second query only
     /// sends the Q-IDs discovered in the first round, so data transfer is
     /// already minimised.
-    async fn db_lookup(tokens: &[String]) -> anyhow::Result<NameHitMap> {
+    async fn db_lookup(tokens: &[TokenQuery]) -> anyhow::Result<NameHitMap> {
+        // The term store returns the text it matched, which is one of our
+        // spellings; this maps it back to the token it belongs to.
+        let mut key_for: HashMap<&str, &str> = HashMap::new();
+        let mut spellings: Vec<&str> = Vec::new();
+        for token in tokens {
+            for spelling in &token.spellings {
+                if key_for.insert(spelling, &token.key).is_none() {
+                    spellings.push(spelling);
+                }
+            }
+        }
+
         // Step 1: term store — items whose label (type 1) or alias (type 3)
-        // exactly equals one of the tokens.
-        let placeholders: String = std::iter::repeat_n("?", tokens.len())
+        // equals one of the spellings.
+        let placeholders: String = std::iter::repeat_n("?", spellings.len())
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
@@ -196,7 +285,7 @@ impl Person {
         );
         let mut conn = database::termstore().await?;
         let rows: Vec<(Vec<u8>, u64, u32)> = conn
-            .exec_iter(sql, tokens.to_vec())
+            .exec_iter(sql, spellings)
             .await?
             .map_and_drop(from_row::<(Vec<u8>, u64, u32)>)
             .await?;
@@ -206,7 +295,11 @@ impl Person {
         }
 
         // Step 2: Wikidata — which of the candidate items are an instance of a
-        // gender / given-name / family-name class.
+        // gender / given-name / family-name class. `STRAIGHT_JOIN` keeps the
+        // join order fixed: the candidates first, then their links. Left to
+        // choose, the optimiser can start from the five class items, whose
+        // links cover most of the database, and the query gets several times
+        // slower the more candidates there are.
         let qids: Vec<String> = {
             let mut set: HashSet<u64> = HashSet::new();
             for (_, item_id, _) in &rows {
@@ -218,14 +311,14 @@ impl Person {
             .collect::<Vec<_>>()
             .join(",");
         let class_sql = format!(
-            r#"SELECT `page_title`, `lt_title`
-                FROM `page`, `pagelinks`, `linktarget`
-                WHERE `page_title` IN ({qid_placeholders})
-                AND `page_namespace` = 0
-                AND `pl_from` = `page_id`
-                AND `pl_target_id` = `lt_id`
-                AND `lt_namespace` = 0
-                AND `lt_title` IN ('{Q_MALE_NAME}', '{Q_FEMALE_NAME}', '{Q_UNISEX_NAME}', '{Q_GIVEN_NAME}', '{Q_FAMILY_NAME}')"#
+            r#"SELECT `p`.`page_title`, `lt`.`lt_title`
+                FROM `page` `p`
+                STRAIGHT_JOIN `pagelinks` `pl` ON `pl`.`pl_from` = `p`.`page_id`
+                JOIN `linktarget` `lt` ON `lt`.`lt_id` = `pl`.`pl_target_id`
+                WHERE `p`.`page_title` IN ({qid_placeholders})
+                AND `p`.`page_namespace` = 0
+                AND `lt`.`lt_namespace` = 0
+                AND `lt`.`lt_title` IN ('{Q_MALE_NAME}', '{Q_FEMALE_NAME}', '{Q_UNISEX_NAME}', '{Q_GIVEN_NAME}', '{Q_FAMILY_NAME}')"#
         );
         let mut wd_conn = database::wikidata().await?;
         let class_rows: Vec<(String, String)> = wd_conn
@@ -248,9 +341,12 @@ impl Person {
                 Some(classes) => *classes,
                 None => continue,
             };
-            let token = String::from_utf8_lossy(&text).into_owned();
+            let text = String::from_utf8_lossy(&text);
+            let Some(&key) = key_for.get(text.as_ref()) else {
+                continue;
+            };
             let is_label = type_id == 1;
-            let entry = out.entry(token).or_default();
+            let entry = out.entry(key.to_string()).or_default();
             if let Some(hit) = entry.iter_mut().find(|hit| hit.qid == qid) {
                 hit.classes |= classes;
                 hit.from_label = hit.from_label || is_label;
@@ -265,15 +361,37 @@ impl Person {
         Ok(out)
     }
 
-    /// Fallback lookup via the Wikidata API/SPARQL, used when no DB connection
-    /// is available. One search per class per token, run concurrently.
-    async fn api_lookup(tokens: &[String]) -> NameHitMap {
-        let futures = tokens.iter().map(|token| Self::api_lookup_token(token));
-        let results = join_all(futures).await;
-        tokens.iter().cloned().zip(results).collect()
+    /// Fallback lookup via the Wikidata API/SPARQL, used when the DB lookup
+    /// failed. One search per class per token, run concurrently.
+    ///
+    /// Returns the hits per token, and the tokens whose lookup fully
+    /// succeeded: only those may be cached. Caching the others would turn a
+    /// failed request into a spurious "no such name" for an hour.
+    async fn api_lookup(tokens: &[TokenQuery]) -> (NameHitMap, HashSet<String>) {
+        let results = join_all(
+            tokens
+                .iter()
+                .map(|token| Self::api_lookup_token(&token.key)),
+        )
+        .await;
+        let mut hits = NameHitMap::new();
+        let mut cacheable = HashSet::new();
+        for (token, result) in tokens.iter().zip(results) {
+            match result {
+                Some(token_hits) => {
+                    cacheable.insert(token.key.clone());
+                    hits.insert(token.key.clone(), token_hits);
+                }
+                None => {
+                    hits.insert(token.key.clone(), Vec::new());
+                }
+            }
+        }
+        (hits, cacheable)
     }
 
-    async fn api_lookup_token(token: &str) -> Vec<NameHit> {
+    /// The name items for one token, or `None` if a request failed.
+    async fn api_lookup_token(token: &str) -> Option<Vec<NameHit>> {
         let classes = [
             (MALE, Q_MALE_NAME),
             (FEMALE, Q_FEMALE_NAME),
@@ -282,27 +400,30 @@ impl Person {
             (FAMILY, Q_FAMILY_NAME),
         ];
         let futures = classes.iter().map(|(bit, class)| async move {
-            let items = Wikidata::search_names_by_class(token, class)
+            Wikidata::search_names_by_class(token, class)
                 .await
-                .unwrap_or_default();
-            (*bit, items)
+                .ok()
+                .map(|items| (*bit, items))
         });
         let results = join_all(futures).await;
         let mut by_qid: HashMap<String, u8> = HashMap::new();
-        for (bit, items) in results {
+        for result in results {
+            let (bit, items) = result?;
             for qid in items {
                 *by_qid.entry(qid.to_string()).or_insert(0) |= bit;
             }
         }
-        by_qid
-            .into_iter()
-            .map(|(qid, class_set)| NameHit {
-                qid,
-                classes: class_set,
-                // The API path matches on the item's label.
-                from_label: true,
-            })
-            .collect()
+        Some(
+            by_qid
+                .into_iter()
+                .map(|(qid, class_set)| NameHit {
+                    qid,
+                    classes: class_set,
+                    // The API path matches on the item's label.
+                    from_label: true,
+                })
+                .collect(),
+        )
     }
 
     /// Turn the looked-up name items into statements: family name (P734),
@@ -314,7 +435,13 @@ impl Person {
         lookup: &NameHitMap,
     ) -> Vec<Statement> {
         let empty: Vec<NameHit> = Vec::new();
-        let get = |token: &str| lookup.get(token).unwrap_or(&empty).as_slice();
+        // The lookup is keyed by the lowercased token; see `token_query`.
+        let get = |token: &str| {
+            lookup
+                .get(&token.to_lowercase())
+                .unwrap_or(&empty)
+                .as_slice()
+        };
 
         // Gender is decided by position: the first given name that yields a
         // confident vote wins. Later (middle) names only get a say when every
@@ -538,12 +665,64 @@ mod tests {
     #[ignore = "needs the databases, see run_live_tests.sh"]
     fn test_db_lookup() {
         database::block_on(async {
-            let hits = Person::db_lookup(&["Heinrich".to_string()]).await.unwrap();
+            let query = Person::token_query("Heinrich");
+            let hits = Person::db_lookup(&[query]).await.unwrap();
             assert!(
-                hits["Heinrich"].iter().any(|hit| hit.classes & MALE != 0),
+                hits["heinrich"].iter().any(|hit| hit.classes & MALE != 0),
                 "{hits:?}"
             );
         });
+    }
+
+    /// A name token written differently still finds the same term-store
+    /// text; the term store's `wbx_text` is case-sensitive.
+    #[test]
+    fn test_token_query_spellings() {
+        for token in ["Leonhard", "leonhard", "LEONHARD"] {
+            let query = Person::token_query(token);
+            assert_eq!(query.key, "leonhard");
+            assert!(
+                query.spellings.iter().any(|s| s == "Leonhard"),
+                "{token}: {:?}",
+                query.spellings
+            );
+        }
+        // Nobiliary particles stay lowercase in a title-cased surname.
+        let query = Person::token_query("von oheimb");
+        assert_eq!(query.key, "von oheimb");
+        assert!(
+            query.spellings.iter().any(|s| s == "von Oheimb"),
+            "{:?}",
+            query.spellings
+        );
+    }
+
+    #[test]
+    fn test_token_queries_deduplicate() {
+        let queries = Person::token_queries(&["Leonhard", "leonhard", "Philipp"]);
+        assert_eq!(
+            queries.iter().map(|q| q.key.as_str()).collect::<Vec<_>>(),
+            vec!["leonhard", "philipp"]
+        );
+    }
+
+    #[test]
+    fn test_resolve_is_case_insensitive() {
+        let hit = NameHit {
+            qid: "Q18226374".to_string(),
+            classes: MALE,
+            from_label: true,
+        };
+        let lookup = HashMap::from([("leonhard".to_string(), vec![hit])]);
+        let statements = Person::resolve(&["Leonhard"], "oheimb", "oheimb", &lookup);
+        assert_eq!(
+            property_values(&statements, "P21"),
+            vec!["Q6581097".to_string()]
+        );
+        assert_eq!(
+            property_values(&statements, "P735"),
+            vec!["Q18226374".to_string()]
+        );
     }
 
     #[test]
@@ -560,6 +739,25 @@ mod tests {
                 property_values(&results, "P21"),
                 vec!["Q6581072".to_string()],
                 "expected exactly one female gender statement"
+            );
+        });
+    }
+
+    #[test]
+    #[ignore]
+    fn test_name_gender_case_insensitive() {
+        database::block_on(async {
+            let _guard = NET_TEST_LOCK.lock().await;
+            let lower = Person::name_gender("leonhard philipp von oheimb")
+                .await
+                .unwrap();
+            if lower.is_empty() {
+                return;
+            }
+            assert_eq!(
+                property_values(&lower, "P21"),
+                vec!["Q6581097".to_string()],
+                "a lowercased name should still be detected as male"
             );
         });
     }

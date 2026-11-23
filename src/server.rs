@@ -446,6 +446,7 @@ impl Server {
 
         let cached = Router::new()
             .route("/initial_search/{query}", get(initial_search))
+            .route("/name_gender/{name}", get(name_gender))
             .route(
                 "/cross_categories/{category_item}/{language}/{depth}",
                 get(cross_cats),
@@ -461,7 +462,6 @@ impl Server {
             .route("/healthz", get(healthz))
             .route("/metrics", get(crate::metrics::metrics_handler))
             .route("/P131/{latitude}/{longitude}", get(p131))
-            .route("/name_gender/{name}", get(name_gender))
             .route("/country_year/{item}/{year}", get(country_year))
             .route("/change_wiki/{from}/{to}", post(change_wiki))
             .route(

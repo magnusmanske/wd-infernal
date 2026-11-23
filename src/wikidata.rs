@@ -1,6 +1,7 @@
 use axum::http::StatusCode;
 use serde_json::Value;
 use std::sync::{LazyLock, OnceLock};
+use std::time::Duration;
 use wikimisc::entity_id::{ItemId, PropertyId};
 use wikimisc::sparql_client::{SparqlClient, SparqlError};
 use wikimisc::sparql_endpoint::SparqlEndpoint;
@@ -18,6 +19,13 @@ const SPARQL_RETRIES: u32 = 1;
 
 /// How many search hits [`Wikidata::search_names_by_class`] looks at.
 const NAME_SEARCH_LIMIT: usize = 10;
+
+/// How long one request on the name-lookup fallback may take. The database
+/// lookup is the normal path; when it fails, [`crate::person::Person`] falls
+/// back to the API, and that fallback must still finish within a request's
+/// 60-second budget when Wikidata is slow. A token costs one search and then
+/// one label check, so the fallback is bounded at about twice this.
+const FALLBACK_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Wikidata;
@@ -62,14 +70,47 @@ impl Wikidata {
         &CLIENT
     }
 
+    /// The Wikidata API client for the name-lookup fallback: the shared one,
+    /// but with [`FALLBACK_TIMEOUT`] so a stuck request cannot use up the
+    /// whole request budget.
+    fn fallback_client() -> &'static WikidataClient {
+        static CLIENT: LazyLock<WikidataClient> = LazyLock::new(|| {
+            let mut client = WikidataClient::new(USER_AGENT);
+            client.set_timeout(FALLBACK_TIMEOUT);
+            client
+        });
+        &CLIENT
+    }
+
+    /// The Query Service client for the name-lookup fallback: like
+    /// [`Self::sparql_client`], but with [`FALLBACK_TIMEOUT`] and no retries.
+    fn fallback_sparql_client() -> Result<&'static SparqlClient, StatusCode> {
+        static CLIENT: OnceLock<SparqlClient> = OnceLock::new();
+        if let Some(client) = CLIENT.get() {
+            return Ok(client);
+        }
+        let client = wikimisc::http::client_builder(USER_AGENT)
+            .timeout(FALLBACK_TIMEOUT)
+            .build()
+            .map_err(|e| {
+                tracing::warn!(%e, "cannot build the fallback HTTP client");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+        Ok(CLIENT.get_or_init(|| SparqlClient::with_client(SparqlEndpoint::wdqs(), client)))
+    }
+
     /// Logs a Wikidata API failure; the caller's request fails with a 500.
     fn api_failure(error: &wikimisc::wikidata::WikidataError) -> StatusCode {
         tracing::warn!(%error, "Wikidata API request failed");
         StatusCode::INTERNAL_SERVER_ERROR
     }
 
-    /// Searches Wikidata via the API for items with the exact label `name` that
-    /// are an instance of (P31) the class `p31`. Returns *all* matching items.
+    /// Searches Wikidata via the API for items with the label `name`
+    /// (compared case-insensitively) that are an instance of (P31) the class
+    /// `p31`. Returns *all* matching items.
+    ///
+    /// Uses the short-timeout clients: this is only the fallback for a failed
+    /// database lookup.
     pub async fn search_names_by_class(name: &str, p31: &str) -> Result<Vec<ItemId>, StatusCode> {
         // It goes into the search and the SPARQL query.
         let p31: ItemId = p31.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -77,7 +118,7 @@ impl Wikidata {
         let phrase = name.replace('"', " ");
         let query =
             CirrusQuery::new(&format!("\"{phrase}\"")).has_statement(PropertyId::new(31), p31);
-        let results = Self::client()
+        let results = Self::fallback_client()
             .search_items(&query.to_string(), NAME_SEARCH_LIMIT)
             .await
             .map_err(|e| Self::api_failure(&e))?;
@@ -95,17 +136,28 @@ impl Wikidata {
           }}"#
         );
 
-        let json = Self::sparql_json(&sparql).await?;
+        let json = Self::fallback_sparql_client()?
+            .query_json(&sparql)
+            .await
+            .map_err(|e| Self::sparql_failure(&e))?;
         Ok(Self::items_with_label(&json, name))
     }
 
-    /// The items `?q` in a SPARQL result whose `?label` is exactly `label`.
+    /// The items `?q` in a SPARQL result whose `?label` is `label`, ignoring
+    /// case: the term store is case-sensitive, but a name is a name.
     fn items_with_label(json: &Value, label: &str) -> Vec<ItemId> {
+        let label = label.to_lowercase();
         let mut items: Vec<ItemId> = json["results"]["bindings"]
             .as_array()
             .into_iter()
             .flatten()
-            .filter(|binding| binding["label"]["value"].as_str() == Some(label))
+            .filter(|binding| {
+                binding["label"]["value"]
+                    .as_str()
+                    .map(str::to_lowercase)
+                    .as_deref()
+                    == Some(label.as_str())
+            })
             .filter_map(|binding| ItemId::from_uri(binding["q"]["value"].as_str()?).ok())
             .collect();
         items.sort();
@@ -174,7 +226,7 @@ mod tests {
     }
 
     #[test]
-    fn test_items_with_label_matches_exactly() {
+    fn test_items_with_label_matches_case_insensitively() {
         let json = serde_json::json!({"results": {"bindings": [
             {"q": {"value": "http://www.wikidata.org/entity/Q1"}, "label": {"value": "Manske"}},
             {"q": {"value": "http://www.wikidata.org/entity/Q1"}, "label": {"value": "Manske"}},
@@ -182,9 +234,14 @@ mod tests {
             {"q": {"value": "http://www.wikidata.org/entity/Q3"}, "label": {"value": "Manske\" || true"}},
             {"q": {"value": "http://www.wikidata.org/entity/Q4}"}, "label": {"value": "Manske"}},
         ]}});
+        // Same name, whatever the case; anything else does not match.
         assert_eq!(
             Wikidata::items_with_label(&json, "Manske"),
-            vec![ItemId::new(1)]
+            vec![ItemId::new(1), ItemId::new(2)]
+        );
+        assert_eq!(
+            Wikidata::items_with_label(&json, "MANske"),
+            vec![ItemId::new(1), ItemId::new(2)]
         );
         assert!(Wikidata::items_with_label(&json, "Nobody").is_empty());
         assert!(Wikidata::items_with_label(&serde_json::json!({}), "Manske").is_empty());
