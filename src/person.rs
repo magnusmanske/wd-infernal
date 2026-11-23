@@ -1,11 +1,12 @@
 use crate::database;
 use crate::wikidata::Wikidata;
 use axum::http::StatusCode;
-use futures::future::join_all;
+use futures::future::{BoxFuture, FutureExt, join_all};
 use moka::sync::Cache as MokaCache;
 use std::collections::{HashMap, HashSet};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
+use tokio::sync::oneshot;
 use wikimisc::mysql_async::{from_row, prelude::Queryable};
 use wikimisc::wikibase::{Reference, Snak, Statement};
 
@@ -63,7 +64,7 @@ const MAX_LOOKUP_TOKENS: usize = 20;
 /// One name token to look up: the case-insensitive key shared by the cache
 /// and the result, and the spellings to try in the term store, whose term
 /// text matches case-sensitively.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct TokenQuery {
     key: String,
     spellings: Vec<String>,
@@ -79,6 +80,66 @@ static NAME_CACHE: LazyLock<NameHitCache> = LazyLock::new(|| {
         .time_to_live(Duration::from_secs(3600))
         .build()
 });
+
+/// Tokens waiting for the next shared lookup round, with the requests
+/// waiting for them.
+#[derive(Default)]
+struct Batch {
+    tokens: Vec<TokenQuery>,
+    keys: HashSet<String>,
+    waiters: Vec<oneshot::Sender<Arc<NameHitMap>>>,
+    scheduled: bool,
+}
+
+/// Cache misses of all in-flight requests form one round. A burst of names,
+/// even different ones, then costs a handful of database queries instead of
+/// a few per request, which keeps the small connection pool (and the
+/// replicas) from becoming the bottleneck.
+static BATCH: LazyLock<Mutex<Batch>> = LazyLock::new(|| Mutex::new(Batch::default()));
+
+/// How long requests may join a round before it runs. The lookup itself takes
+/// far longer, so this barely delays a single request, but a simultaneous
+/// burst shares one round.
+const BATCH_WINDOW: Duration = Duration::from_millis(5);
+
+/// Adds `tokens` to the next lookup round and returns the result receiver.
+/// `run` performs the round's lookup; only the request that scheduled the
+/// round uses it, the others just add their tokens.
+fn submit_lookup(
+    tokens: &[TokenQuery],
+    run: impl FnOnce(Vec<TokenQuery>) -> BoxFuture<'static, NameHitMap> + Send + 'static,
+) -> oneshot::Receiver<Arc<NameHitMap>> {
+    let (sender, receiver) = oneshot::channel();
+    let mut pending = BATCH.lock().unwrap_or_else(|e| e.into_inner());
+    for token in tokens {
+        if pending.keys.insert(token.key.clone()) {
+            pending.tokens.push(token.clone());
+        }
+    }
+    pending.waiters.push(sender);
+    if !pending.scheduled {
+        pending.scheduled = true;
+        tokio::spawn(async move {
+            // Let requests that arrive at the same time join this round.
+            tokio::time::sleep(BATCH_WINDOW).await;
+            let (round, waiters) = {
+                let mut next = BATCH.lock().unwrap_or_else(|e| e.into_inner());
+                // Tokens arriving from now on form the next round.
+                next.scheduled = false;
+                next.keys.clear();
+                (
+                    std::mem::take(&mut next.tokens),
+                    std::mem::take(&mut next.waiters),
+                )
+            };
+            let hits = Arc::new(run(round).await);
+            for waiter in waiters {
+                let _ = waiter.send(hits.clone());
+            }
+        });
+    }
+    receiver
+}
 
 /// Nobiliary particles / surname prefixes (German "von", Dutch "van der",
 /// French/Spanish "de la", Italian "di"/"della", Arabic "al"/"bin", Celtic
@@ -161,6 +222,42 @@ impl Person {
                     result.insert(query.key, hits);
                 }
                 None => misses.push(query),
+            }
+        }
+        if misses.is_empty() {
+            return result;
+        }
+
+        // Cache misses of concurrent requests share a lookup round, so a
+        // burst of names costs a handful of queries rather than a few per
+        // request.
+        let receiver = submit_lookup(&misses, |round| {
+            async move { Self::lookup(&round).await }.boxed()
+        });
+        let fetched = match receiver.await {
+            Ok(fetched) => fetched,
+            // The round ended without an answer (it panicked); do the lookup
+            // here rather than fail the request.
+            Err(_) => Arc::new(Self::lookup(&misses).await),
+        };
+        for query in &misses {
+            let hits = fetched.get(&query.key).cloned().unwrap_or_default();
+            result.insert(query.key.clone(), hits);
+        }
+        result
+    }
+
+    /// Fetch and cache the hits for `tokens`, which are not in the cache yet.
+    async fn lookup(tokens: &[TokenQuery]) -> NameHitMap {
+        let mut result = NameHitMap::new();
+        let mut misses = Vec::new();
+        for token in tokens {
+            match NAME_CACHE.get(token.key.as_str()) {
+                // Another round may have looked it up in the meantime.
+                Some(hits) => {
+                    result.insert(token.key.clone(), hits);
+                }
+                None => misses.push(token.clone()),
             }
         }
         if misses.is_empty() {
@@ -723,6 +820,45 @@ mod tests {
             property_values(&statements, "P735"),
             vec!["Q18226374".to_string()]
         );
+    }
+
+    /// Concurrent requests split a burst's cache misses into one lookup
+    /// round, so different names do not each start their own queries.
+    #[tokio::test]
+    async fn test_bursts_share_one_round() {
+        use futures::future::FutureExt;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let finder = |counter: Arc<AtomicUsize>| {
+            move |tokens: Vec<TokenQuery>| {
+                counter.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    tokens
+                        .into_iter()
+                        .map(|query| (query.key, Vec::new()))
+                        .collect::<NameHitMap>()
+                }
+                .boxed()
+            }
+        };
+
+        let first = submit_lookup(
+            &[Person::token_query("Bursttestone")],
+            finder(calls.clone()),
+        );
+        let second = submit_lookup(
+            &[Person::token_query("Bursttesttwo")],
+            finder(calls.clone()),
+        );
+        let first = first.await.unwrap();
+        let second = second.await.unwrap();
+        assert!(first.contains_key("bursttestone") && first.contains_key("bursttesttwo"));
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "both requests share one round"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "the lookup must run once");
     }
 
     #[test]

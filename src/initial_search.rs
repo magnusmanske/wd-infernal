@@ -28,15 +28,19 @@ impl InitialSearch {
         let placeholders: String = std::iter::repeat_n("?", items.len())
             .collect::<Vec<_>>()
             .join(",");
+        // `STRAIGHT_JOIN` fixes the join order: the candidates first, then
+        // their links to Q5. Left to choose, the optimiser can start from the
+        // Q5 item, whose incoming links cover a large part of the database,
+        // and the query gets slower the more candidates there are.
         let sql = format!(
-            r#"SELECT DISTINCT `page_title`
-			    FROM page,pagelinks,linktarget
-			    WHERE page_title IN ({placeholders})
-				AND page_namespace=0
-				AND pl_from=page_id
-				AND pl_target_id=lt_id
-				AND lt_namespace=0
-				AND lt_title='Q5'"#
+            r#"SELECT DISTINCT `p`.`page_title`
+				    FROM `page` `p`
+				    STRAIGHT_JOIN `pagelinks` `pl` ON `pl`.`pl_from` = `p`.`page_id`
+				    JOIN `linktarget` `lt` ON `lt`.`lt_id` = `pl`.`pl_target_id`
+				    WHERE `p`.`page_title` IN ({placeholders})
+					AND `p`.`page_namespace` = 0
+					AND `lt`.`lt_namespace` = 0
+					AND `lt`.`lt_title` = 'Q5'"#
         );
         let mut conn = database::wikidata().await?;
         let results = conn
